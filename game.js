@@ -253,8 +253,10 @@
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     // On iOS Safari, window.innerHeight is the LARGE viewport (behind the toolbar) and
-    // crops the bottom. Prefer the true visible area from visualViewport when available.
-    const vv = (typeof VisualViewport !== 'undefined') ? VisualViewport : null;
+    // crops the bottom. Prefer the true visible area from window.visualViewport when
+    // available (NOTE: window.visualViewport is the live instance; the bare global
+    // `VisualViewport` is just the interface/constructor and has no width/height).
+    const vv = window.visualViewport || null;
     VIEW.w = (vv && vv.width) ? vv.width : (window.innerWidth || document.documentElement.clientWidth);
     VIEW.h = (vv && vv.height) ? vv.height : (window.innerHeight || document.documentElement.clientHeight);
     canvas.width = VIEW.w * dpr;
@@ -266,11 +268,11 @@
   window.addEventListener('resize', resize);
   // Re-sync when iOS shows/hides its browser chrome (visualViewport change).
   // Guard BOTH existence AND addEventListener being callable: some engines expose
-  // a VisualViewport object that is NOT an EventTarget, so calling addEventListener
-  // would throw and kill the whole game init.
-  if (VisualViewport && typeof VisualViewport.addEventListener === 'function') {
-    VisualViewport.addEventListener('resize', resize);
-    VisualViewport.addEventListener('scroll', resize);
+  // a window.visualViewport object that is NOT a full EventTarget, so calling
+  // addEventListener would throw and kill the whole game init.
+  if (window.visualViewport && typeof window.visualViewport.addEventListener === 'function') {
+    window.visualViewport.addEventListener('resize', resize);
+    window.visualViewport.addEventListener('scroll', resize);
   }
 
   // world->screen transform. On touch we use a moderate follow-zoom (clamped) so the
