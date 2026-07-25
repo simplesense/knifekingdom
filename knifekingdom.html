@@ -20,7 +20,9 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(--txt); font-family: var(--font); user-select: none; -webkit-user-select: none; }
-#app { position: fixed; inset: 0; }
+/* Use the DYNAMIC viewport so iOS Safari's bottom toolbar doesn't crop the bottom.
+   100dvh = visible area (toolbar hidden); falls back to 100vh where unsupported. */
+#app { position: fixed; inset: 0; height: 100vh; height: 100dvh; max-height: 100dvh; }
 
 .screen { position: absolute; inset: 0; display: none; }
 .screen.active { display: block; }
@@ -88,7 +90,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 
 /* ---------------- GAME / CANVAS ---------------- */
 #game { background: #070310; }
-#canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+#canvas { display: block; width: 100%; height: 100%; height: 100dvh; touch-action: none; }
 
 .hud { position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: flex-start; padding: 14px 16px; pointer-events: none; z-index: 5; }
 .hud-left, .hud-right { display: flex; gap: 10px; align-items: center; }
@@ -595,8 +597,11 @@ body.touch #game.active .touch-hint { display: block; }
   // ---------- Sizing ----------
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    VIEW.w = window.innerWidth;
-    VIEW.h = window.innerHeight;
+    // On iOS Safari, window.innerHeight is the LARGE viewport (behind the toolbar) and
+    // crops the bottom. Prefer the true visible area from visualViewport when available.
+    const vv = (typeof VisualViewport !== 'undefined') ? VisualViewport : null;
+    VIEW.w = (vv && vv.width) ? vv.width : (window.innerWidth || document.documentElement.clientWidth);
+    VIEW.h = (vv && vv.height) ? vv.height : (window.innerHeight || document.documentElement.clientHeight);
     canvas.width = VIEW.w * dpr;
     canvas.height = VIEW.h * dpr;
     canvas.style.width = VIEW.w + 'px';
@@ -604,6 +609,11 @@ body.touch #game.active .touch-hint { display: block; }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
   window.addEventListener('resize', resize);
+  // Re-sync when iOS shows/hides its browser chrome (visualViewport change).
+  if (typeof VisualViewport !== 'undefined') {
+    VisualViewport.addEventListener('resize', resize);
+    VisualViewport.addEventListener('scroll', resize);
+  }
 
   // world->screen transform. On touch we use a moderate follow-zoom (clamped) so the
   // arena stays readable but a follow camera keeps the player in view; on desktop we

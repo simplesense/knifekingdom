@@ -252,8 +252,11 @@
   // ---------- Sizing ----------
   function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    VIEW.w = window.innerWidth;
-    VIEW.h = window.innerHeight;
+    // On iOS Safari, window.innerHeight is the LARGE viewport (behind the toolbar) and
+    // crops the bottom. Prefer the true visible area from visualViewport when available.
+    const vv = (typeof VisualViewport !== 'undefined') ? VisualViewport : null;
+    VIEW.w = (vv && vv.width) ? vv.width : (window.innerWidth || document.documentElement.clientWidth);
+    VIEW.h = (vv && vv.height) ? vv.height : (window.innerHeight || document.documentElement.clientHeight);
     canvas.width = VIEW.w * dpr;
     canvas.height = VIEW.h * dpr;
     canvas.style.width = VIEW.w + 'px';
@@ -261,6 +264,11 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
   window.addEventListener('resize', resize);
+  // Re-sync when iOS shows/hides its browser chrome (visualViewport change).
+  if (typeof VisualViewport !== 'undefined') {
+    VisualViewport.addEventListener('resize', resize);
+    VisualViewport.addEventListener('scroll', resize);
+  }
 
   // world->screen transform. On touch we use a moderate follow-zoom (clamped) so the
   // arena stays readable but a follow camera keeps the player in view; on desktop we
