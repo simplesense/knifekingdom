@@ -143,6 +143,10 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 .key { display: inline-block; background: rgba(33,230,255,0.12); border: 1px solid var(--neon-cyan); color: var(--neon-cyan); border-radius: 8px; padding: 2px 10px; font-weight: 800; margin-right: 8px; font-size: 14px; }
 .how-tip { margin-top: 10px; color: #a98fd6; background: rgba(255,213,74,0.08); border-left: 3px solid var(--neon-gold); padding: 12px 16px; border-radius: 8px; }
 
+/* level pill + banner */
+.hud-pill.lvl { border-color: var(--neon-gold); color: var(--neon-gold); box-shadow: 0 0 14px rgba(255,213,74,0.35); font-weight: 800; }
+.banner-level { margin-top: 12px; font-size: 15px; color: var(--neon-gold); letter-spacing: 1px; text-shadow: 0 0 10px rgba(255,213,74,0.5); }
+
 .hidden { display: none !important; }
 
 /* small screens */
@@ -190,6 +194,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
       <canvas id="canvas"></canvas>
       <div id="hud" class="hud">
         <div class="hud-left">
+          <div class="hud-pill lvl">⚡ Level: <b id="hudLevel">1</b></div>
           <div class="hud-pill">🎯 Innocents: <b id="hudInnocents">0</b></div>
           <div class="hud-pill" id="hudExtra"></div>
           <div class="hud-pill">🪙 <b id="hudCoins">0</b></div>
@@ -209,6 +214,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
         <div class="banner-role">YOU ARE THE</div>
         <div class="banner-title">MURDERER</div>
         <div class="banner-sub">Eliminate all innocents. Avoid the Sheriff's sight.</div>
+        <div class="banner-level" id="bannerLevel"></div>
       </div>
 
       <!-- Pause -->
@@ -391,12 +397,34 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   let rafId = null;
   let mapCfg = MAPS.arena;
   let currentMode = 'murderer';
+  // difficulty / progression
+  function levelForWins(w) { return 1 + Math.floor(w / 3); }   // +1 level every 3 wins
+  function diffParams() {
+    const L = levelForWins(save.wins);
+    const extra = L - 1;
+    return {
+      level: L,
+      innocentBonus: Math.min(8, 2 + extra),     // extra innocents
+      aiSpeedMul: 1 + Math.min(0.5, extra * 0.07), // faster AI
+      time: Math.max(16, 30 - extra * 2),          // shorter timer
+      crateBonus: Math.min(10, extra),             // more cover
+      tilt: Math.min(0.42, 0.12 + extra * 0.05),   // steeper camera tilt
+      explodeScale: 1 + extra * 0.18,              // bigger explosions
+    };
+  }
+  let diff = diffParams();
   // easter eggs
   let discoMode = false;
   let rainbowKnife = false;
   let typedBuffer = '';
   let konamiIdx = 0;
   const KONAMI = ['arrowup','arrowup','arrowdown','arrowdown','arrowleft','arrowright','arrowleft','arrowright','b','a'];
+  // 3D / camera / effects
+  let camTilt = 0.18;     // vertical foreshorten (vy *= (1-tilt))
+  let camSway = 0;        // gentle camera sway phase
+  let blood = { level: 0, slides: [] }; // sheriff-kill gore overlay (level decays; slides drip)
+  let shockwaves = [];    // expanding explosion rings
+  let killsMilestone = 0; // murderer kills since last explosion tier bump (every 5)
 
   // ---------- Input ----------
   const keys = {};
@@ -462,6 +490,30 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
     const ox = (VIEW.w - WORLD.w * scale) / 2;
     const oy = (VIEW.h - WORLD.h * scale) / 2;
     return { scale, ox, oy };
+  }
+  // Pseudo-3D: tilt the world (vertical foreshorten) + gentle camera sway,
+  // and project a world point with a "height" lift (for floating bodies / knives).
+  function project(wx, wy, h = 0) {
+    const t = worldTransform();
+    const tilt = camTilt;
+    // camera "angle": gentle horizontal parallax based on player's aim (over-the-shoulder feel)
+    const look = (player.aim || 0);
+    const camX = Math.sin(look) * 22 + Math.sin(camSway) * 10;
+    const camY = -Math.cos(look) * 10; // look up/down shifts vertical
+    return {
+      x: wx * t.scale + t.ox + camX * t.scale,
+      y: (wy * (1 - tilt) - h) * t.scale + t.oy + camY * t.scale,
+      scale: t.scale, tilt,
+    };
+  }
+  function drawShadow(ctx, x, y, r) {
+    ctx.save();
+    ctx.globalAlpha = 0.28;
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.ellipse(x, y, r * 0.9, r * (1 - camTilt) * 0.9, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
   }
   function toScreen(wx, wy) {
     const t = worldTransform();
@@ -532,14 +584,20 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   }
 
   function startRound() {
+    diff = diffParams();
+    camTilt = diff.tilt;
+    camSway = 0;
+    blood = { level: 0, slides: [] };
+    shockwaves = [];
+    killsMilestone = 0;
     mapCfg = MAPS[save.equippedMap] || MAPS.arena;
     player.role = currentMode;
     player.x = WORLD.w / 2; player.y = WORLD.h / 2; player.alive = true; player.aim = 0;
     knives = []; particles = []; floaters = [];
-    roundTime = 30; coinsThisRound = 0; killsThisRound = 0; knifeCooldown = 0; shake = 0;
-    buildCrates(mapCfg.crates);
+    roundTime = diff.time; coinsThisRound = 0; killsThisRound = 0; knifeCooldown = 0; shake = 0;
+    buildCrates(mapCfg.crates + diff.crateBonus);
 
-    const count = 7 + Math.min(6, Math.floor(save.wins / 2)); // scales difficulty
+    const count = 7 + Math.min(6, Math.floor(save.wins / 2)) + diff.innocentBonus; // scales difficulty
     const pts = spawnPositions(count + 1);
     innocents = [];
     for (let i = 0; i < count; i++) {
@@ -551,10 +609,10 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
     sheriff = null; murderer = null;
     if (currentMode === 'murderer') {
       const sp = pts[count];
-      sheriff = { x: sp.x, y: sp.y, r: 16, alive: true, dir: rand(0, Math.PI*2), turn: rand(30,90), alert: 0, shootCd: 0 };
+      sheriff = { x: sp.x, y: sp.y, r: 16, alive: true, dir: rand(0, Math.PI*2), turn: rand(30,90), alert: 0, shootCd: 0, speedMul: diff.aiSpeedMul };
     } else {
       const mp = pts[count];
-      murderer = { x: mp.x, y: mp.y, r: 16, alive: true, dir: rand(0, Math.PI*2), turn: rand(40,100), recharge: 0, wander: rand(0,Math.PI*2), wt: rand(40,90) };
+      murderer = { x: mp.x, y: mp.y, r: 16, alive: true, dir: rand(0, Math.PI*2), turn: rand(40,100), recharge: 0, wander: rand(0,Math.PI*2), wt: rand(40,90), speedMul: diff.aiSpeedMul };
     }
 
     roundActive = true; paused = false;
@@ -572,6 +630,8 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
       title.classList.add('sheriff');
       sub.textContent = 'Shoot the Murderer (red cone). Protect the innocents!';
     }
+    const blvl = banner.querySelector('.banner-level');
+    if (blvl) blvl.textContent = `⚡ LEVEL ${diff.level}  ·  ${diff.innocentBonus} extra targets  ·  AI ×${diff.aiSpeedMul.toFixed(2)}  ·  ${diff.time}s`;
     banner.classList.remove('hidden');
     setTimeout(() => banner.classList.add('hidden'), 1700);
     updateHUD();
@@ -601,12 +661,46 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   function floatText(x, y, text, color) {
     floaters.push({ x, y, text, color, life: 50 });
   }
+  // Progressive explosions: every 5 murderer kills, the blast gets bigger & bloodier.
+  function explode(x, y, color) {
+    const tier = Math.floor(killsMilestone / 5);   // 0,1,2...
+    const scale = diff.explodeScale * (1 + tier * 0.45);
+    const baseR = 26 * scale;
+    spawnParticles(x, y, color, 18 + tier * 10, 3 + tier * 1.5);
+    spawnParticles(x, y, '#ffffff', 10 + tier * 6, 4 + tier);
+    // expanding shockwave ring(s)
+    const rings = 1 + Math.min(2, tier);
+    for (let i = 0; i < rings; i++) {
+      shockwaves.push({ x, y, h: 14, r: baseR * (0.4 + i*0.5), speed: (3.2 + tier*0.8) * (i*0.4 + 1), life: 26 + tier*8, max: 26 + tier*8, width: 3 + tier*2, color });
+    }
+    shake = Math.max(shake, 8 + tier * 4);
+  }
+  function triggerBlood() {
+    // sheriff just killed the murderer — cover the screen in blood + brain matter
+    blood.level = 0.95;
+    blood.slide = 0;
+    blood.blobs = [];
+    blood.slides = [];
+    const cols = ['#7a0000', '#9b0010', '#b00018', '#5e0000'];
+    for (let i = 0; i < 26; i++) {
+      blood.blobs.push({ x: Math.random(), y: Math.random()*0.7, r: 8 + Math.random()*34, c: cols[(Math.random()*cols.length)|0] });
+    }
+    for (let i = 0; i < 14; i++) {
+      blood.slides.push({ x: Math.random(), y0: Math.random()*0.6, len: 0.2 + Math.random()*0.5 });
+    }
+    SFX.death();
+  }
 
   // ---------- Update ----------
   function update() {
     if (!roundActive || paused) return;
 
-    // --- player movement ---
+    // camera + effect timers
+    camSway += 0.02;
+    if (blood.level > 0) { blood.level = Math.max(0, blood.level - 0.012); blood.slide += 2.2; }
+    for (let i = shockwaves.length - 1; i >= 0; i--) {
+      const w = shockwaves[i]; w.r += w.speed; w.life--; if (w.life <= 0) shockwaves.splice(i, 1);
+    }
     let dx = 0, dy = 0;
     if (keys['w'] || keys['arrowup']) dy -= 1;
     if (keys['s'] || keys['arrowdown']) dy += 1;
@@ -637,7 +731,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
       } else { inn.panic = Math.max(0, inn.panic - 0.02); }
       inn.wt--;
       if (inn.wt <= 0) { inn.wander = rand(0, Math.PI*2); inn.wt = rand(40, 110); }
-      const sp = inn.panic > 0.5 ? 2.6 : 1.5;
+      const sp = (inn.panic > 0.5 ? 2.6 : 1.5) * (threat ? threat.speedMul || 1 : 1);
       let mvx = Math.cos(targetAng) * sp, mvy = Math.sin(targetAng) * sp;
       const ix = clamp(inn.x + mvx, 16, WORLD.w - 16);
       const iy = clamp(inn.y + mvy, 16, WORLD.h - 16);
@@ -649,8 +743,8 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
     if (sheriff && sheriff.alive) {
       sheriff.turn--;
       if (sheriff.turn <= 0) { sheriff.dir += rand(-1.2, 1.2); sheriff.turn = rand(40, 110); }
-      const sx = clamp(sheriff.x + Math.cos(sheriff.dir) * 1.4, 20, WORLD.w - 20);
-      const sy = clamp(sheriff.y + Math.sin(sheriff.dir) * 1.4, 20, WORLD.h - 20);
+      const sx = clamp(sheriff.x + Math.cos(sheriff.dir) * 1.4 * sheriff.speedMul, 20, WORLD.w - 20);
+      const sy = clamp(sheriff.y + Math.sin(sheriff.dir) * 1.4 * sheriff.speedMul, 20, WORLD.h - 20);
       if (!hitsCrate(sx, sheriff.y, sheriff.r)) sheriff.x = sx;
       if (!hitsCrate(sheriff.x, sy, sheriff.r)) sheriff.y = sy;
       const dToPlayer = dist(sheriff, player);
@@ -691,7 +785,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
       else { murderer.panic = Math.max(0, murderer.panic - 0.03); if (target) goalAng = angleTo(murderer, target); }
       murderer.wt--;
       if (murderer.wt <= 0) { murderer.wander = rand(0, Math.PI*2); murderer.wt = rand(40, 90); }
-      const msp = murderer.panic > 0.5 ? 3.0 : 2.4;
+      const msp = (murderer.panic > 0.5 ? 3.0 : 2.4) * murderer.speedMul;
       const mx = clamp(murderer.x + Math.cos(goalAng)*msp, 18, WORLD.w-18);
       const my = clamp(murderer.y + Math.sin(goalAng)*msp, 18, WORLD.h-18);
       if (!hitsCrate(mx, murderer.y, murderer.r)) murderer.x = mx;
@@ -721,6 +815,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
             SFX.hit(); shake = Math.max(shake, 8);
             coinsThisRound += 5; save.coins += 5; killsThisRound++;
             floatText(inn.x, inn.y - 10, '+5', '#ffd54a'); SFX.coin();
+            killsMilestone++; explode(inn.x, inn.y, '#ff2e88');
             dead = true; break;
           }
         }
@@ -731,6 +826,8 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
           SFX.hit(); shake = Math.max(shake, 10);
           coinsThisRound += 25; save.coins += 25; killsThisRound++;
           floatText(murderer.x, murderer.y - 10, '+25', '#ffd54a'); SFX.coin();
+          explode(murderer.x, murderer.y, '#ffd54a');
+          triggerBlood();
           dead = true;
         }
       }
@@ -739,7 +836,8 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
         for (const inn of innocents) {
           if (inn.alive && dist(k, inn) < inn.r + k.r) {
             inn.alive = false; spawnParticles(inn.x, inn.y, '#ff2e88', 18, 4);
-            SFX.hit(); dead = true; break;
+            SFX.hit(); killsMilestone++; explode(inn.x, inn.y, '#ff2e88');
+            dead = true; break;
           }
         }
         if (!dead && currentMode === 'sheriff' && player.alive && dist(k, player) < player.r + k.r) {
@@ -806,7 +904,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
     for (let x = t.ox; x < t.ox + WORLD.w * t.scale; x += gs) { ctx.beginPath(); ctx.moveTo(x, t.oy); ctx.lineTo(x, t.oy + WORLD.h * t.scale); ctx.stroke(); }
     for (let y = t.oy; y < t.oy + WORLD.h * t.scale; y += gs) { ctx.beginPath(); ctx.moveTo(t.ox, y); ctx.lineTo(t.ox + WORLD.w * t.scale, y); ctx.stroke(); }
 
-    const S = (wx, wy) => ({ x: wx * t.scale + t.ox, y: wy * t.scale + t.oy });
+    const S = (wx, wy, h = 0) => project(wx, wy, h);
     const sc = t.scale;
 
     // vision cone: AI sheriff (murderer mode) OR player sheriff (sheriff mode)
@@ -827,23 +925,35 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
       ctx.restore();
     }
 
-    // crates
+    // crates (drawn as 3D boxes: shadow + body + raised top face)
     for (const c of crates) {
-      const p = S(c.x, c.y);
-      ctx.fillStyle = 'rgba(60,30,90,0.9)';
-      ctx.strokeStyle = 'rgba(177,75,255,0.7)';
-      ctx.lineWidth = 2;
+      const g = S(c.x + c.w/2, c.y + c.h/2);
       const ww = c.w * sc, hh = c.h * sc;
-      ctx.fillRect(p.x, p.y, ww, hh);
-      ctx.strokeRect(p.x, p.y, ww, hh);
-      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x+ww, p.y+hh);
-      ctx.moveTo(p.x+ww, p.y); ctx.lineTo(p.x, p.y+hh); ctx.stroke();
+      const lift = 14 * sc; // box height
+      drawShadow(ctx, g.x, g.y, Math.max(ww, hh) * 0.5);
+      // side
+      ctx.fillStyle = 'rgba(40,20,60,0.95)';
+      ctx.beginPath();
+      ctx.moveTo(g.x - ww/2, g.y - hh/2); ctx.lineTo(g.x + ww/2, g.y - hh/2);
+      ctx.lineTo(g.x + ww/2, g.y + hh/2 - lift); ctx.lineTo(g.x - ww/2, g.y + hh/2 - lift);
+      ctx.closePath(); ctx.fill();
+      // top face
+      ctx.fillStyle = 'rgba(60,30,90,0.95)';
+      ctx.strokeStyle = 'rgba(177,75,255,0.7)'; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(g.x - ww/2, g.y - hh/2 - lift);
+      ctx.lineTo(g.x + ww/2, g.y - hh/2 - lift);
+      ctx.lineTo(g.x + ww/2, g.y + hh/2 - lift);
+      ctx.lineTo(g.x - ww/2, g.y + hh/2 - lift);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
     }
 
-    // innocents
+    // innocents (with ground shadow; lifted body)
     for (const inn of innocents) {
       if (!inn.alive) continue;
-      const p = S(inn.x, inn.y);
+      const g = S(inn.x, inn.y);
+      drawShadow(ctx, g.x, g.y, inn.r * sc);
+      const p = S(inn.x, inn.y, 10);
       ctx.fillStyle = '#8be0ff';
       ctx.strokeStyle = '#21e6ff'; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(p.x, p.y, inn.r * sc, 0, Math.PI*2); ctx.fill(); ctx.stroke();
@@ -854,7 +964,9 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 
     // sheriff (AI, murderer mode)
     if (sheriff) {
-      const p = S(sheriff.x, sheriff.y);
+      const g = S(sheriff.x, sheriff.y);
+      drawShadow(ctx, g.x, g.y, sheriff.r * sc);
+      const p = S(sheriff.x, sheriff.y, 12);
       ctx.fillStyle = '#ffd54a';
       ctx.strokeStyle = '#fff0a8'; ctx.lineWidth = 3;
       ctx.beginPath(); ctx.arc(p.x, p.y, sheriff.r * sc, 0, Math.PI*2); ctx.fill(); ctx.stroke();
@@ -867,7 +979,9 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 
     // murderer (AI, sheriff mode)
     if (murderer && murderer.alive) {
-      const p = S(murderer.x, murderer.y);
+      const g = S(murderer.x, murderer.y);
+      drawShadow(ctx, g.x, g.y, murderer.r * sc);
+      const p = S(murderer.x, murderer.y, 12);
       ctx.shadowColor = '#ff2e88'; ctx.shadowBlur = 16 * sc;
       ctx.fillStyle = '#1a1024'; ctx.strokeStyle = '#ff2e88'; ctx.lineWidth = 3;
       ctx.beginPath(); ctx.arc(p.x, p.y, murderer.r * sc, 0, Math.PI*2); ctx.fill(); ctx.stroke();
@@ -878,9 +992,9 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
       ctx.restore();
     }
 
-    // knives
+    // knives (lifted slightly for 3D feel)
     for (const k of knives) {
-      const p = S(k.x, k.y);
+      const p = S(k.x, k.y, 14);
       ctx.save();
       ctx.translate(p.x, p.y);
       ctx.rotate(Math.atan2(k.vy, k.vx));
@@ -893,9 +1007,11 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
       ctx.restore();
     }
 
-    // player — draw according to role
+    // player — draw according to role (with shadow + lift)
     if (player.alive) {
-      const p = S(player.x, player.y);
+      const g = S(player.x, player.y);
+      drawShadow(ctx, g.x, g.y, player.r * sc);
+      const p = S(player.x, player.y, 12);
       const k = KNIVES[save.equippedKnife] || KNIVES.crimson;
       const knifeColor = rainbowKnife ? rainbowColor() : k.color;
       const knifeTrail = rainbowKnife ? rainbowColor() : k.trail;
@@ -913,6 +1029,47 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
         ctx.beginPath(); ctx.moveTo(player.r*sc*0.9, 0); ctx.lineTo(player.r*sc*0.2, -3*sc); ctx.lineTo(player.r*sc*0.2, 3*sc); ctx.closePath(); ctx.fill();
         ctx.restore();
       }
+    }
+
+    // shockwaves (expanding explosion rings)
+    for (const w of shockwaves) {
+      const p = S(w.x, w.y);
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, w.life / w.max) * 0.6;
+      ctx.strokeStyle = w.color; ctx.lineWidth = w.width * sc;
+      ctx.beginPath(); ctx.arc(p.x, p.y - w.h*sc, w.r * sc, 0, Math.PI*2); ctx.stroke();
+      ctx.restore();
+    }
+
+    // blood / brain-matter screen overlay (sheriff kill) — drawn in screen space, slides down
+    if (blood.level > 0.01) {
+      const W = VIEW.w, H = VIEW.h;
+      ctx.save();
+      ctx.globalAlpha = Math.min(0.92, blood.level);
+      // base splatter wash
+      ctx.fillStyle = 'rgba(120,0,0,1)';
+      const grad = ctx.createLinearGradient(0, 0, 0, H);
+      grad.addColorStop(0, 'rgba(140,0,0,0.95)');
+      grad.addColorStop(0.5, 'rgba(90,0,0,0.75)');
+      grad.addColorStop(1, 'rgba(60,0,0,0.55)');
+      ctx.fillStyle = grad;
+      // top splatter band that descends
+      const drop = (1 - blood.level) * H * 0.6 + blood.slide;
+      ctx.fillRect(0, 0, W, Math.min(H, drop + 40));
+      // splatter blobs
+      ctx.globalAlpha = Math.min(1, blood.level);
+      for (const s of blood.blobs) {
+        ctx.fillStyle = s.c;
+        ctx.beginPath(); ctx.arc(s.x * W, (s.y - (1-blood.level)) * H * 0.8 + blood.slide, s.r * (W/900), 0, Math.PI*2); ctx.fill();
+      }
+      // brain-matter streaks sliding down
+      ctx.strokeStyle = 'rgba(200,170,150,0.9)'; ctx.lineWidth = 6;
+      for (const s of blood.slides) {
+        ctx.beginPath(); ctx.moveTo(s.x * W, s.y0 * H + blood.slide);
+        ctx.lineTo(s.x * W + Math.sin(s.y0*20)*8, s.y0 * H + blood.slide + s.len * H);
+        ctx.stroke();
+      }
+      ctx.restore();
     }
 
     // disco overlay
@@ -960,6 +1117,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   function updateHUD(remainingOverride) {
     const remaining = remainingOverride != null ? remainingOverride : innocents.filter(i => i.alive).length;
     $('hudInnocents').textContent = remaining;
+    const lvl = $('hudLevel'); if (lvl) lvl.textContent = 'LVL ' + diff.level;
     const extra = $('hudExtra');
     if (currentMode === 'sheriff') {
       // count of murderers still alive
