@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 <title>KNIFE KINGDOM — Murder Mystery Arena</title>
 <link rel="stylesheet" href="style.css" />
 </head>
@@ -57,6 +57,13 @@
           <button id="btnPause" class="hud-btn">⏸</button>
         </div>
       </div>
+
+      <!-- Touch / mobile controls (shown only on touch devices) -->
+      <div id="touchControls" class="touch-controls">
+        <div id="joystick" class="joystick"><div id="joyKnob" class="joy-knob"></div></div>
+        <div id="fireBtn" class="fire-btn">🔪<span class="fire-label">SHOOT</span></div>
+      </div>
+      <div class="touch-hint hidden">🕹 Drag the left pad to move &amp; aim · tap the right side to throw · hold 🔪 to auto-fire</div>
 
       <!-- Round start banner -->
       <div id="roundBanner" class="banner hidden">

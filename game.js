@@ -143,6 +143,10 @@
   let blood = { level: 0, slides: [] }; // sheriff-kill gore overlay (level decays; slides drip)
   let shockwaves = [];    // expanding explosion rings
   let killsMilestone = 0; // murderer kills since last explosion tier bump (every 5)
+  // touch / mobile
+  const isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0 || /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+  const joy = { active: false, dx: 0, dy: 0, id: null, baseX: 0, baseY: 0 };
+  let firing = false;
 
   // ---------- Input ----------
   const keys = {};
@@ -174,19 +178,66 @@
   });
   canvas.addEventListener('mousedown', (e) => { if (e.button === 0) { mouse.down = true; if (roundActive && !paused) throwKnife(); } });
   canvas.addEventListener('mouseup', () => { mouse.down = false; });
-  // touch
-  canvas.addEventListener('touchmove', (e) => {
-    e.preventDefault();
-    const t = e.touches[0]; const rect = canvas.getBoundingClientRect();
-    mouse.x = (t.clientX - rect.left) / rect.width * VIEW.w;
-    mouse.y = (t.clientY - rect.top) / rect.height * VIEW.h;
-  }, { passive: false });
+  // ---------- Mobile / touch controls ----------
+  if (isTouch) document.body.classList.add('touch');
+  const joyEl = $('joystick'), knobEl = $('joyKnob'), fireEl = $('fireBtn');
+
+  function joyStart(x, y, id) {
+    joy.active = true; joy.id = id; joy.baseX = x; joy.baseY = y;
+    joy.dx = 0; joy.dy = 0;
+    if (knobEl) knobEl.style.transform = 'translate(0px,0px)';
+    // show touch hint briefly
+    const hint = document.querySelector('.touch-hint'); if (hint) setTimeout(() => hint.classList.add('hidden'), 2600);
+  }
+  function joyMove(x, y) {
+    if (!joy.active) return;
+    let dx = x - joy.baseX, dy = y - joy.baseY;
+    const max = 46, len = Math.hypot(dx, dy);
+    if (len > max) { dx = dx / len * max; dy = dy / len * max; }
+    joy.dx = dx / max; joy.dy = dy / max;
+    if (knobEl) knobEl.style.transform = `translate(${dx}px,${dy}px)`;
+  }
+  function joyEnd() {
+    joy.active = false; joy.dx = 0; joy.dy = 0; joy.id = null;
+    if (knobEl) knobEl.style.transform = 'translate(0px,0px)';
+  }
+
+  if (joyEl) {
+    joyEl.addEventListener('touchstart', (e) => {
+      e.preventDefault(); const t = e.changedTouches[0];
+      const r = joyEl.getBoundingClientRect();
+      joyStart(r.left + r.width/2, r.top + r.height/2, t.identifier);
+    }, { passive: false });
+    joyEl.addEventListener('touchmove', (e) => {
+      e.preventDefault(); const t = [...e.changedTouches].find(c => c.identifier === joy.id); if (t) joyMove(t.clientX, t.clientY);
+    }, { passive: false });
+    joyEl.addEventListener('touchend', (e) => { e.preventDefault(); const t = [...e.changedTouches].find(c => c.identifier === joy.id); if (t) joyEnd(); }, { passive: false });
+    joyEl.addEventListener('touchcancel', () => joyEnd(), { passive: false });
+  }
+  if (fireEl) {
+    fireEl.addEventListener('touchstart', (e) => { e.preventDefault(); firing = true; if (roundActive && !paused) throwKnife(); }, { passive: false });
+    fireEl.addEventListener('touchend', (e) => { e.preventDefault(); firing = false; }, { passive: false });
+    fireEl.addEventListener('touchcancel', () => { firing = false; }, { passive: false });
+  }
+  // Right-half tap: aim at the point relative to player (who is screen-centered on touch) and throw.
   canvas.addEventListener('touchstart', (e) => {
     e.preventDefault();
-    const t = e.touches[0]; const rect = canvas.getBoundingClientRect();
-    mouse.x = (t.clientX - rect.left) / rect.width * VIEW.w;
-    mouse.y = (t.clientY - rect.top) / rect.height * VIEW.h;
+    const t = e.changedTouches[0];
+    const rect = canvas.getBoundingClientRect();
+    const sx = t.clientX - rect.left, sy = t.clientY - rect.top;
+    // ignore touches on the left ~45% (joystick zone) — but joystick handles its own; only act on right side
+    if (sx < rect.width * 0.45) {
+      // left side: treat as an extra move-toward point? Keep simple: ignore (joystick covers it)
+      return;
+    }
+    mouse.x = sx / rect.width * VIEW.w; mouse.y = sy / rect.height * VIEW.h;
     if (roundActive && !paused) throwKnife();
+  }, { passive: false });
+  canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    const t = e.changedTouches[0]; const rect = canvas.getBoundingClientRect();
+    const sx = t.clientX - rect.left, sy = t.clientY - rect.top;
+    if (sx >= rect.width * 0.45) { mouse.x = sx / rect.width * VIEW.w; mouse.y = sy / rect.height * VIEW.h; }
   }, { passive: false });
 
   // ---------- Sizing ----------
@@ -204,9 +255,21 @@
 
   // world->screen transform keeps world centered + scaled to fit
   function worldTransform() {
-    const scale = Math.min(VIEW.w / WORLD.w, VIEW.h / WORLD.h);
-    const ox = (VIEW.w - WORLD.w * scale) / 2;
-    const oy = (VIEW.h - WORLD.h * scale) / 2;
+    const baseScale = Math.min(VIEW.w / WORLD.w, VIEW.h / WORLD.h);
+    const scale = isTouch ? Math.max(baseScale, 2.0) : baseScale; // zoom in on mobile
+    let ox, oy;
+    if (isTouch && player) {
+      // follow camera centered on player, clamped within world bounds
+      const camX = WORLD.w * scale / 2 - player.x * scale;
+      const camY = WORLD.h * (1 - camTilt) * scale / 2 - player.y * (1 - camTilt) * scale;
+      const minOx = VIEW.w - WORLD.w * scale, maxOx = 0;
+      const minOy = VIEW.h - WORLD.h * (1 - camTilt) * scale, maxOy = 0;
+      ox = Math.min(maxOx, Math.max(minOx, camX));
+      oy = Math.min(maxOy, Math.max(minOy, camY));
+    } else {
+      ox = (VIEW.w - WORLD.w * scale) / 2;
+      oy = (VIEW.h - WORLD.h * scale) / 2;
+    }
     return { scale, ox, oy };
   }
   // Pseudo-3D: tilt the world (vertical foreshorten) + gentle camera sway,
@@ -424,14 +487,25 @@
     if (keys['s'] || keys['arrowdown']) dy += 1;
     if (keys['a'] || keys['arrowleft']) dx -= 1;
     if (keys['d'] || keys['arrowright']) dx += 1;
+    // mobile joystick contributes too
+    if (joy.active) { dx += joy.dx; dy += joy.dy; }
     if (dx || dy) { const m = Math.hypot(dx, dy); dx /= m; dy /= m; }
     const nx = clamp(player.x + dx * player.speed, 20, WORLD.w - 20);
     const ny = clamp(player.y + dy * player.speed, 20, WORLD.h - 20);
     if (!hitsCrate(nx, player.y, player.r)) player.x = nx;
     if (!hitsCrate(player.x, ny, player.r)) player.y = ny;
     // aim
-    const w = screenToWorld(mouse.x, mouse.y);
-    player.aim = angleTo(player, w);
+    if (isTouch && (joy.active && (joy.dx || joy.dy))) {
+      // on touch with joystick pushed, aim where you're heading (auto-aim forward)
+      player.aim = Math.atan2(dy, dx);
+    } else if (!isTouch) {
+      const w = screenToWorld(mouse.x, mouse.y);
+      player.aim = angleTo(player, w);
+    } else if (firing) {
+      // hold fire on touch: keep throwing straight ahead (player.aim unchanged)
+    }
+    // auto-fire while the fire button is held
+    if (firing && knifeCooldown <= 0 && player.alive) throwKnife();
 
     if (knifeCooldown > 0) knifeCooldown--;
 

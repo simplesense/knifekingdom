@@ -142,8 +142,62 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 
 .hidden { display: none !important; }
 
-/* small screens */
-@media (max-width: 520px) {
-  .hud-timer { font-size: 30px; }
-  .hud-pill { font-size: 13px; padding: 6px 10px; }
+/* ================= MOBILE / TOUCH ================= */
+/* full-bleed, no rubber-band, respect notches */
+html, body { position: fixed; width: 100%; height: 100%; overscroll-behavior: none; }
+#app { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+canvas#canvas { touch-action: none; }
+
+/* touch controls only shown when the game screen is active AND it's a touch device */
+.touch-controls { display: none; position: absolute; inset: 0; z-index: 20; pointer-events: none; }
+body.touch #game.active .touch-controls { display: block; }
+
+.joystick {
+  position: absolute; left: calc(28px + env(safe-area-inset-left)); bottom: calc(34px + env(safe-area-inset-bottom));
+  width: 132px; height: 132px; border-radius: 50%;
+  background: rgba(177,75,255,0.10); border: 2px solid rgba(177,75,255,0.5);
+  box-shadow: inset 0 0 24px rgba(177,75,255,0.25); pointer-events: auto;
+  touch-action: none;
 }
+.joy-knob {
+  position: absolute; left: 50%; top: 50%; width: 58px; height: 58px; margin: -29px 0 0 -29px;
+  border-radius: 50%; background: radial-gradient(circle at 35% 30%, #ff8ab8, #ff2e88);
+  box-shadow: 0 0 18px rgba(255,46,136,0.7); transition: transform .04s linear;
+}
+.fire-btn {
+  position: absolute; right: calc(30px + env(safe-area-inset-right)); bottom: calc(40px + env(safe-area-inset-bottom));
+  width: 104px; height: 104px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #fff0a8, #ffd54a);
+  border: 3px solid #fff; color: #3a2a00; font-size: 30px; font-weight: 900;
+  display: flex; align-items: center; justify-content: center; flex-direction: column;
+  box-shadow: 0 0 26px rgba(255,213,74,0.7); pointer-events: auto; touch-action: none;
+  user-select: none; -webkit-user-select: none;
+}
+.fire-btn .fire-label { font-size: 12px; letter-spacing: 2px; margin-top: 2px; }
+.fire-btn:active { transform: scale(0.92); }
+
+/* bigger, cleaner HUD on phones; keep it from blocking thumbs */
+@media (max-width: 760px) {
+  .hud-pill { font-size: 13px; padding: 6px 10px; }
+  .hud-pill.lvl { font-size: 13px; }
+  .hud-timer { font-size: 30px; }
+  .hud-btn { width: 40px; height: 40px; font-size: 18px; }
+  .hud-left { gap: 6px; }
+  .banner-title { font-size: 44px; }
+  .egg-toast { font-size: 13px; padding: 10px 16px; }
+}
+@media (max-width: 520px) {
+  .hud-pill { font-size: 12px; padding: 5px 8px; }
+  .hud-left { flex-wrap: wrap; max-width: 52%; }
+  .hud-right { gap: 6px; }
+}
+
+/* hint shown on touch devices */
+.touch-hint {
+  position: absolute; left: 50%; bottom: calc(180px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+  z-index: 21; color: #cbb6ff; font-size: 13px; background: rgba(20,10,38,0.8);
+  border: 1px solid rgba(177,75,255,0.4); padding: 8px 14px; border-radius: 999px; pointer-events: none;
+  animation: toastpop .4s ease;
+}
+body.touch #game.active .touch-hint { display: block; }
+
