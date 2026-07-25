@@ -176,7 +176,10 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
           <span>Rounds won: <b id="menuWins">0</b></span>
           <span>Best kills/round: <b id="menuBest">0</b></span>
         </div>
-        <div id="creditBox" class="credit-box">🎮 Built by <a href="https://satya.me" target="_blank" rel="noopener">Satya's AI</a> for his daughter <b>Nutella</b> 💜 &mdash; a huge MM2 / Roblox fan.</div>
+        <div id="creditBox" class="credit-box">
+          🎮 Built by <a href="https://satya.me" target="_blank" rel="noopener">Satya's AI</a> for his daughter <b>Nutella</b> 💜 &mdash; a huge MM2 / Roblox fan.<br>
+          🤖 Coded by <a href="https://hermes-agent.nousresearch.com" target="_blank" rel="noopener">Hermes</a>, the LLM that wrote this game.
+        </div>
         <div id="eggToast" class="egg-toast hidden"></div>
         <div class="menu-foot">Made with 🔪 · WASD + Mouse</div>
       </div>
@@ -661,9 +664,10 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
           sheriff.shootCd = 24;
           spawnParticles(player.x, player.y, '#ffd54a', 14, 3);
           SFX.alarm(); shake = 14;
+          const sh = sheriff, pl = player;
           setTimeout(() => {
-            if (roundActive && !paused && sheriff.alert > 0.6 && dist(sheriff, player) < 470 && !lineBlocked(sheriff.x, sheriff.y, player.x, player.y) && player.alive) {
-              player.alive = false; endRound(false, 'The Sheriff caught your glow.');
+            if (roundActive && !paused && sh && sh === sheriff && sh.alert > 0.6 && dist(sh, pl) < 470 && !lineBlocked(sh.x, sh.y, pl.x, pl.y) && pl.alive) {
+              pl.alive = false; endRound(false, 'The Sheriff caught your glow.');
             }
           }, 380);
         }
