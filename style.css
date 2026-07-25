@@ -42,7 +42,28 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 .menu-buttons { display: flex; flex-direction: column; gap: 12px; margin: 26px auto 0; max-width: 320px; }
 .menu-stats { margin-top: 18px; display: flex; gap: 22px; justify-content: center; color: #a98fd6; font-size: 14px; }
 .menu-stats b { color: var(--neon-green); }
-.menu-foot { margin-top: 22px; color: #6e5a9a; font-size: 12px; }
+.menu-foot { margin-top: 18px; color: #6e5a9a; font-size: 12px; }
+
+/* mode selector */
+.mode-select { display: flex; gap: 10px; justify-content: center; margin: 18px 0 12px; }
+.mode-btn { font-family: var(--font); font-weight: 800; font-size: 15px; cursor: pointer; padding: 10px 18px; border-radius: 999px; border: 2px solid rgba(177,75,255,0.5); color: var(--txt); background: rgba(177,75,255,0.08); transition: transform .08s, box-shadow .2s, background .2s; }
+.mode-btn:hover { transform: translateY(-2px); box-shadow: 0 0 14px var(--neon-purple); }
+.mode-btn.active { border-color: var(--neon-cyan); color: #fff; background: linear-gradient(135deg, rgba(33,230,255,0.35), rgba(177,75,255,0.25)); box-shadow: 0 0 18px rgba(33,230,255,0.5); }
+
+/* credit box */
+.credit-box { margin: 16px auto 0; max-width: 460px; font-size: 13px; line-height: 1.5; color: #cbb6ff; background: rgba(255,46,136,0.08); border: 1px solid rgba(255,46,136,0.4); border-radius: 12px; padding: 10px 16px; box-shadow: 0 0 16px rgba(255,46,136,0.2); }
+.credit-box a { color: var(--neon-cyan); font-weight: 800; text-decoration: none; text-shadow: 0 0 8px rgba(33,230,255,0.6); }
+.credit-box a:hover { text-decoration: underline; }
+.credit-box b { color: var(--neon-gold); }
+
+/* easter-egg toast */
+.egg-toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); z-index: 50; background: var(--panel); border: 2px solid var(--neon-gold); color: var(--neon-gold); font-weight: 800; padding: 12px 22px; border-radius: 999px; box-shadow: 0 0 22px rgba(255,213,74,0.5); font-size: 15px; animation: toastpop .4s ease; }
+@keyframes toastpop { from { opacity: 0; transform: translateX(-50%) translateY(12px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+
+/* banner variants */
+.banner-title.sheriff { color: var(--neon-gold); text-shadow: 0 0 24px var(--neon-gold); }
+.banner-title.rainbow { animation: huerotate 2s linear infinite; background: linear-gradient(90deg,#ff2e88,#ffd54a,#46ff8c,#21e6ff,#b14bff,#ff2e88); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+@keyframes huerotate { to { filter: hue-rotate(360deg); } }
 
 /* ---------------- BUTTONS ---------------- */
 .btn {

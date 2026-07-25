@@ -95,9 +95,10 @@
   // ---------- Game State ----------
   const VIEW = { w: 0, h: 0 };          // canvas pixel size
   const WORLD = { w: 1280, h: 720 };    // logical world size
-  const player = { x: 0, y: 0, r: 16, speed: 4.2, alive: true, aim: 0 };
+  const player = { x: 0, y: 0, r: 16, speed: 4.2, alive: true, aim: 0, role: 'murderer' };
   let innocents = [];
   let sheriff = null;
+  let murderer = null;       // in sheriff mode the AI murderer
   let knives = [];           // thrown knives (player + sheriff bullets abstracted)
   let particles = [];
   let floaters = [];         // floating +coin text
@@ -113,6 +114,13 @@
   let lastTs = 0;
   let rafId = null;
   let mapCfg = MAPS.arena;
+  let currentMode = 'murderer';
+  // easter eggs
+  let discoMode = false;
+  let rainbowKnife = false;
+  let typedBuffer = '';
+  let konamiIdx = 0;
+  const KONAMI = ['arrowup','arrowup','arrowdown','arrowdown','arrowleft','arrowright','arrowleft','arrowright','b','a'];
 
   // ---------- Input ----------
   const keys = {};
@@ -123,6 +131,16 @@
     if (k === 'p' && screens.game.classList.contains('active')) togglePause();
     if (k === 'm') toggleMute();
     if (k === ' ') { e.preventDefault(); if (roundActive && !paused) throwKnife(); }
+    if (e.shiftKey && k === 'd') triggerDisco();
+    // ---- easter eggs ----
+    // Konami code
+    konamiIdx = (k === KONAMI[konamiIdx]) ? konamiIdx + 1 : (k === KONAMI[0] ? 1 : 0);
+    if (konamiIdx === KONAMI.length) { konamiIdx = 0; triggerRainbow(); }
+    // typed word: nutella -> grants golden knife
+    if (/^[a-z]$/.test(k)) {
+      typedBuffer = (typedBuffer + k).slice(-12);
+      if (typedBuffer.endsWith('nutella')) { typedBuffer = ''; triggerNutella(); }
+    }
   });
   window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
 
@@ -239,13 +257,12 @@
 
   function startRound() {
     mapCfg = MAPS[save.equippedMap] || MAPS.arena;
-    roundsWonThisSession = save.wins; // not used
+    player.role = currentMode;
     player.x = WORLD.w / 2; player.y = WORLD.h / 2; player.alive = true; player.aim = 0;
     knives = []; particles = []; floaters = [];
     roundTime = 30; coinsThisRound = 0; killsThisRound = 0; knifeCooldown = 0; shake = 0;
     buildCrates(mapCfg.crates);
 
-    // innocents + 1 sheriff
     const count = 7 + Math.min(6, Math.floor(save.wins / 2)); // scales difficulty
     const pts = spawnPositions(count + 1);
     innocents = [];
@@ -255,12 +272,32 @@
         vx: 0, vy: 0, panic: 0, wander: rand(0, Math.PI * 2), wt: rand(40, 110),
       });
     }
-    const sp = pts[count];
-    sheriff = { x: sp.x, y: sp.y, r: 16, alive: true, dir: rand(0, Math.PI*2), turn: rand(30,90), alert: 0, shootCd: 0 };
+    sheriff = null; murderer = null;
+    if (currentMode === 'murderer') {
+      const sp = pts[count];
+      sheriff = { x: sp.x, y: sp.y, r: 16, alive: true, dir: rand(0, Math.PI*2), turn: rand(30,90), alert: 0, shootCd: 0 };
+    } else {
+      const mp = pts[count];
+      murderer = { x: mp.x, y: mp.y, r: 16, alive: true, dir: rand(0, Math.PI*2), turn: rand(40,100), recharge: 0, wander: rand(0,Math.PI*2), wt: rand(40,90) };
+    }
 
     roundActive = true; paused = false;
-    $('roundBanner').classList.remove('hidden');
-    setTimeout(() => $('roundBanner').classList.add('hidden'), 1700);
+    // role banner
+    const banner = $('roundBanner');
+    const role = banner.querySelector('.banner-role');
+    const title = banner.querySelector('.banner-title');
+    const sub = banner.querySelector('.banner-sub');
+    title.classList.remove('sheriff','rainbow');
+    if (currentMode === 'murderer') {
+      role.textContent = 'YOU ARE THE'; title.textContent = 'MURDERER';
+      sub.textContent = 'Eliminate all innocents. Avoid the Sheriff\'s sight.';
+    } else {
+      role.textContent = 'YOU ARE THE'; title.textContent = 'SHERIFF';
+      title.classList.add('sheriff');
+      sub.textContent = 'Shoot the Murderer (red cone). Protect the innocents!';
+    }
+    banner.classList.remove('hidden');
+    setTimeout(() => banner.classList.add('hidden'), 1700);
     updateHUD();
     resize();
   }
@@ -310,15 +347,17 @@
 
     if (knifeCooldown > 0) knifeCooldown--;
 
-    // --- innocents AI: wander, flee from sheriff sight, avoid crates ---
+    const threat = currentMode === 'murderer' ? sheriff : murderer;
+
+    // --- innocents AI: wander, flee from the threat's sight, avoid crates ---
     for (const inn of innocents) {
       if (!inn.alive) continue;
-      // flee if sheriff near & looking
-      const ds = dist(inn, sheriff);
+      const ds = threat ? dist(inn, threat) : 9999;
+      const alerted = threat && threat.alert > 0.3;
       let targetAng = inn.wander;
-      if (ds < 220 && sheriff.alert > 0.3) {
+      if (ds < 220 && alerted) {
         inn.panic = 1;
-        targetAng = angleTo(sheriff, inn); // run away
+        targetAng = angleTo(threat, inn); // run away
       } else { inn.panic = Math.max(0, inn.panic - 0.02); }
       inn.wt--;
       if (inn.wt <= 0) { inn.wander = rand(0, Math.PI*2); inn.wt = rand(40, 110); }
@@ -330,63 +369,108 @@
       if (!hitsCrate(inn.x, iy, inn.r)) inn.y = iy;
     }
 
-    // --- sheriff AI: patrol, scan, detect player in cone, shoot ---
-    sheriff.turn--;
-    if (sheriff.turn <= 0) { sheriff.dir += rand(-1.2, 1.2); sheriff.turn = rand(40, 110); }
-    // drift slowly forward
-    const sx = clamp(sheriff.x + Math.cos(sheriff.dir) * 1.4, 20, WORLD.w - 20);
-    const sy = clamp(sheriff.y + Math.sin(sheriff.dir) * 1.4, 20, WORLD.h - 20);
-    if (!hitsCrate(sx, sheriff.y, sheriff.r)) sheriff.x = sx;
-    if (!hitsCrate(sheriff.x, sy, sheriff.r)) sheriff.y = sy;
-    // detection
-    const dToPlayer = dist(sheriff, player);
-    const angToP = angleTo(sheriff, player);
-    let diff = Math.abs(((angToP - sheriff.dir + Math.PI*3) % (Math.PI*2)) - Math.PI);
-    const inCone = dToPlayer < 360 && diff < 0.5 && !lineBlocked(sheriff.x, sheriff.y, player.x, player.y);
-    if (inCone) {
-      sheriff.alert = Math.min(1, sheriff.alert + 0.06);
-      sheriff.dir = angToP; // lock on
-      if (sheriff.shootCd <= 0 && dToPlayer < 460) {
-        // fire! (abstract as instant hit check next frames; we give 0.4s before kill)
-        sheriff.shootCd = 24;
-        spawnParticles(player.x, player.y, '#ffd54a', 14, 3);
-        SFX.alarm();
-        shake = 14;
-        setTimeout(() => {
-          if (roundActive && !paused && sheriff.alert > 0.6 && dist(sheriff, player) < 470 && !lineBlocked(sheriff.x, sheriff.y, player.x, player.y) && player.alive) {
-            player.alive = false; endRound(false, 'The Sheriff caught your glow.');
-          }
-        }, 380);
-      }
-    } else {
-      sheriff.alert = Math.max(0, sheriff.alert - 0.02);
+    // --- sheriff AI (murderer mode): patrol, scan, detect player in cone, shoot ---
+    if (sheriff && sheriff.alive) {
+      sheriff.turn--;
+      if (sheriff.turn <= 0) { sheriff.dir += rand(-1.2, 1.2); sheriff.turn = rand(40, 110); }
+      const sx = clamp(sheriff.x + Math.cos(sheriff.dir) * 1.4, 20, WORLD.w - 20);
+      const sy = clamp(sheriff.y + Math.sin(sheriff.dir) * 1.4, 20, WORLD.h - 20);
+      if (!hitsCrate(sx, sheriff.y, sheriff.r)) sheriff.x = sx;
+      if (!hitsCrate(sheriff.x, sy, sheriff.r)) sheriff.y = sy;
+      const dToPlayer = dist(sheriff, player);
+      const angToP = angleTo(sheriff, player);
+      let diff = Math.abs(((angToP - sheriff.dir + Math.PI*3) % (Math.PI*2)) - Math.PI);
+      const inCone = dToPlayer < 360 && diff < 0.5 && !lineBlocked(sheriff.x, sheriff.y, player.x, player.y);
+      if (inCone) {
+        sheriff.alert = Math.min(1, sheriff.alert + 0.06);
+        sheriff.dir = angToP;
+        if (sheriff.shootCd <= 0 && dToPlayer < 460) {
+          sheriff.shootCd = 24;
+          spawnParticles(player.x, player.y, '#ffd54a', 14, 3);
+          SFX.alarm(); shake = 14;
+          const sh = sheriff, pl = player;
+          setTimeout(() => {
+            if (roundActive && !paused && sh && sh === sheriff && sh.alert > 0.6 && dist(sh, pl) < 470 && !lineBlocked(sh.x, sh.y, pl.x, pl.y) && pl.alive) {
+              pl.alive = false; endRound(false, 'The Sheriff caught your glow.');
+            }
+          }, 380);
+        }
+      } else { sheriff.alert = Math.max(0, sheriff.alert - 0.02); }
+      if (sheriff.shootCd > 0) sheriff.shootCd--;
     }
-    if (sheriff.shootCd > 0) sheriff.shootCd--;
+
+    // --- murderer AI (sheriff mode): hunt innocents, snipe sheriff when safe ---
+    if (murderer && murderer.alive) {
+      murderer.turn--;
+      if (murderer.turn <= 0) { murderer.dir += rand(-1.0, 1.0); murderer.turn = rand(40, 100); }
+      // chase nearest innocent, or flee from sheriff cone
+      let target = null, best = 1e9;
+      for (const inn of innocents) { if (!inn.alive) continue; const d = dist(murderer, inn); if (d < best) { best = d; target = inn; } }
+      let goalAng = murderer.wander;
+      const dm = dist(murderer, player);
+      const angM = angleTo(player, murderer);
+      let mdiff = Math.abs(((angM - player.aim + Math.PI*3) % (Math.PI*2)) - Math.PI);
+      const inSheriffCone = dm < 360 && mdiff < 0.45;
+      if (inSheriffCone) { murderer.panic = 1; goalAng = angM; }
+      else { murderer.panic = Math.max(0, murderer.panic - 0.03); if (target) goalAng = angleTo(murderer, target); }
+      murderer.wt--;
+      if (murderer.wt <= 0) { murderer.wander = rand(0, Math.PI*2); murderer.wt = rand(40, 90); }
+      const msp = murderer.panic > 0.5 ? 3.0 : 2.4;
+      const mx = clamp(murderer.x + Math.cos(goalAng)*msp, 18, WORLD.w-18);
+      const my = clamp(murderer.y + Math.sin(goalAng)*msp, 18, WORLD.h-18);
+      if (!hitsCrate(mx, murderer.y, murderer.r)) murderer.x = mx;
+      if (!hitsCrate(murderer.x, my, murderer.r)) murderer.y = my;
+      // throw knives at nearest innocent when off cooldown
+      if (murderer.recharge > 0) murderer.recharge--;
+      else if (target) {
+        const ka = angleTo(murderer, target);
+        knives.push({ x: murderer.x, y: murderer.y, vx: Math.cos(ka)*9, vy: Math.sin(ka)*9, r: 7, life: 80, color: '#ff2e88', trail: '#ff8ab8', from: 'murderer' });
+        murderer.recharge = 40;
+      }
+    }
 
     // --- knives ---
     for (let i = knives.length - 1; i >= 0; i--) {
       const k = knives[i];
       k.x += k.vx; k.y += k.vy; k.life--;
-      // trail particles
       if (Math.random() < 0.5) spawnParticles(k.x, k.y, k.trail, 1, 0.4);
       let dead = k.life <= 0;
       if (k.x < -20 || k.x > WORLD.w + 20 || k.y < -20 || k.y > WORLD.h + 20) dead = true;
-      // hit crates
       if (!dead) for (const c of crates) if (circleRectHit(k.x, k.y, k.r, c.x, c.y, c.w, c.h)) { spawnParticles(k.x, k.y, k.trail, 6, 2); dead = true; break; }
-      // hit innocents (player knives)
+      // player knives
       if (!dead && k.from === 'player') {
         for (const inn of innocents) {
           if (inn.alive && dist(k, inn) < inn.r + k.r) {
-            inn.alive = false;
-            spawnParticles(inn.x, inn.y, '#ff2e88', 22, 4);
+            inn.alive = false; spawnParticles(inn.x, inn.y, '#ff2e88', 22, 4);
             SFX.hit(); shake = Math.max(shake, 8);
-            // coins
-            const reward = 5;
-            coinsThisRound += reward; save.coins += reward; killsThisRound++;
-            floatText(inn.x, inn.y - 10, '+' + reward, '#ffd54a');
-            SFX.coin();
+            coinsThisRound += 5; save.coins += 5; killsThisRound++;
+            floatText(inn.x, inn.y - 10, '+5', '#ffd54a'); SFX.coin();
             dead = true; break;
           }
+        }
+        // sheriff mode: player knife hits the murderer
+        if (!dead && currentMode === 'sheriff' && murderer && murderer.alive && dist(k, murderer) < murderer.r + k.r) {
+          murderer.alive = false;
+          spawnParticles(murderer.x, murderer.y, '#ffd54a', 26, 4);
+          SFX.hit(); shake = Math.max(shake, 10);
+          coinsThisRound += 25; save.coins += 25; killsThisRound++;
+          floatText(murderer.x, murderer.y - 10, '+25', '#ffd54a'); SFX.coin();
+          dead = true;
+        }
+      }
+      // murderer knives (sheriff mode): hit innocents, or hit the player sheriff
+      if (!dead && k.from === 'murderer') {
+        for (const inn of innocents) {
+          if (inn.alive && dist(k, inn) < inn.r + k.r) {
+            inn.alive = false; spawnParticles(inn.x, inn.y, '#ff2e88', 18, 4);
+            SFX.hit(); dead = true; break;
+          }
+        }
+        if (!dead && currentMode === 'sheriff' && player.alive && dist(k, player) < player.r + k.r) {
+          player.alive = false; spawnParticles(player.x, player.y, '#ff2e88', 24, 4);
+          SFX.death(); shake = 14;
+          setTimeout(() => { if (roundActive && !paused) endRound(false, 'The Murderer got you!'); }, 250);
+          dead = true;
         }
       }
       if (dead) knives.splice(i, 1);
@@ -409,8 +493,14 @@
     roundTime -= 1 / 60;
     const remaining = innocents.filter(i => i.alive).length;
     updateHUD(remaining);
-    if (remaining === 0) { endRound(true); }
-    else if (roundTime <= 0) { endRound(false, 'Time ran out. The innocents survived.'); }
+    if (currentMode === 'murderer') {
+      if (remaining === 0) endRound(true);
+      else if (roundTime <= 0) endRound(false, 'Time ran out. The innocents survived.');
+    } else {
+      if (murderer && !murderer.alive) endRound(true);
+      else if (remaining === 0) endRound(false, 'The Murderer killed everyone. Too late!');
+      else if (roundTime <= 0) endRound(false, 'Time up — the Murderer escaped!');
+    }
   }
 
   function hitsCrate(x, y, r) {
@@ -443,17 +533,20 @@
     const S = (wx, wy) => ({ x: wx * t.scale + t.ox, y: wy * t.scale + t.oy });
     const sc = t.scale;
 
-    // sheriff vision cone
-    if (sheriff) {
-      const a = S(sheriff.x, sheriff.y);
+    // vision cone: AI sheriff (murderer mode) OR player sheriff (sheriff mode)
+    const coneOwner = (currentMode === 'murderer') ? sheriff : (player.alive ? player : null);
+    const coneAlert = (currentMode === 'murderer') ? (sheriff ? sheriff.alert : 0) : 0;
+    const coneDir = (currentMode === 'murderer') ? (sheriff ? sheriff.dir : 0) : player.aim;
+    if (coneOwner) {
+      const a = S(coneOwner.x, coneOwner.y);
       const coneLen = 360 * sc, half = 0.5;
       ctx.save();
       const grad = ctx.createRadialGradient(a.x, a.y, 0, a.x, a.y, coneLen);
-      grad.addColorStop(0, sheriff.alert > 0.5 ? 'rgba(255,80,80,0.34)' : 'rgba(255,213,74,0.20)');
+      grad.addColorStop(0, coneAlert > 0.5 ? 'rgba(255,80,80,0.34)' : 'rgba(255,213,74,0.20)');
       grad.addColorStop(1, 'rgba(255,213,74,0)');
       ctx.fillStyle = grad;
       ctx.beginPath(); ctx.moveTo(a.x, a.y);
-      ctx.arc(a.x, a.y, coneLen, sheriff.dir - half, sheriff.dir + half);
+      ctx.arc(a.x, a.y, coneLen, coneDir - half, coneDir + half);
       ctx.closePath(); ctx.fill();
       ctx.restore();
     }
@@ -483,18 +576,30 @@
       ctx.beginPath(); ctx.arc(p.x, p.y - inn.r*sc*0.4, inn.r*sc*0.35, 0, Math.PI*2); ctx.fill();
     }
 
-    // sheriff
+    // sheriff (AI, murderer mode)
     if (sheriff) {
       const p = S(sheriff.x, sheriff.y);
       ctx.fillStyle = '#ffd54a';
       ctx.strokeStyle = '#fff0a8'; ctx.lineWidth = 3;
       ctx.beginPath(); ctx.arc(p.x, p.y, sheriff.r * sc, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-      // star
       ctx.fillStyle = '#3a2a00'; drawStar(p.x, p.y, 5, sheriff.r*sc*0.6, sheriff.r*sc*0.28);
       if (sheriff.alert > 0.5) {
         ctx.fillStyle = '#ff3b3b'; ctx.font = `${Math.round(16*sc*1.4)}px sans-serif`; ctx.textAlign = 'center';
         ctx.fillText('!', p.x, p.y - sheriff.r*sc - 6);
       }
+    }
+
+    // murderer (AI, sheriff mode)
+    if (murderer && murderer.alive) {
+      const p = S(murderer.x, murderer.y);
+      ctx.shadowColor = '#ff2e88'; ctx.shadowBlur = 16 * sc;
+      ctx.fillStyle = '#1a1024'; ctx.strokeStyle = '#ff2e88'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(p.x, p.y, murderer.r * sc, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(murderer.dir);
+      ctx.fillStyle = '#ff2e88';
+      ctx.beginPath(); ctx.moveTo(murderer.r*sc*0.9, 0); ctx.lineTo(murderer.r*sc*0.2, -3*sc); ctx.lineTo(murderer.r*sc*0.2, 3*sc); ctx.closePath(); ctx.fill();
+      ctx.restore();
     }
 
     // knives
@@ -512,21 +617,34 @@
       ctx.restore();
     }
 
-    // player (murderer) — only if alive
+    // player — draw according to role
     if (player.alive) {
       const p = S(player.x, player.y);
       const k = KNIVES[save.equippedKnife] || KNIVES.crimson;
-      // glow
-      ctx.shadowColor = k.trail; ctx.shadowBlur = 18 * sc;
-      ctx.fillStyle = '#1a1024';
-      ctx.strokeStyle = k.color; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(p.x, p.y, player.r * sc, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-      ctx.shadowBlur = 0;
-      // knife in hand pointing at aim
-      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(player.aim);
-      ctx.fillStyle = k.color; ctx.shadowColor = k.trail; ctx.shadowBlur = 10*sc;
-      ctx.beginPath(); ctx.moveTo(player.r*sc*0.9, 0); ctx.lineTo(player.r*sc*0.2, -3*sc); ctx.lineTo(player.r*sc*0.2, 3*sc); ctx.closePath(); ctx.fill();
-      ctx.restore();
+      const knifeColor = rainbowKnife ? rainbowColor() : k.color;
+      const knifeTrail = rainbowKnife ? rainbowColor() : k.trail;
+      ctx.shadowColor = knifeTrail; ctx.shadowBlur = 18 * sc;
+      if (currentMode === 'sheriff') {
+        ctx.fillStyle = '#ffd54a'; ctx.strokeStyle = '#fff0a8'; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(p.x, p.y, player.r * sc, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+        ctx.shadowBlur = 0; ctx.fillStyle = '#3a2a00'; drawStar(p.x, p.y, 5, player.r*sc*0.6, player.r*sc*0.28);
+      } else {
+        ctx.fillStyle = '#1a1024'; ctx.strokeStyle = knifeColor; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(p.x, p.y, player.r * sc, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(player.aim);
+        ctx.fillStyle = knifeColor; ctx.shadowColor = knifeTrail; ctx.shadowBlur = 10*sc;
+        ctx.beginPath(); ctx.moveTo(player.r*sc*0.9, 0); ctx.lineTo(player.r*sc*0.2, -3*sc); ctx.lineTo(player.r*sc*0.2, 3*sc); ctx.closePath(); ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    // disco overlay
+    if (discoMode) {
+      ctx.globalAlpha = 0.10;
+      ctx.fillStyle = rainbowColor();
+      ctx.fillRect(t.ox, t.oy, WORLD.w * t.scale, WORLD.h * t.scale);
+      ctx.globalAlpha = 1;
     }
 
     // particles
@@ -566,6 +684,14 @@
   function updateHUD(remainingOverride) {
     const remaining = remainingOverride != null ? remainingOverride : innocents.filter(i => i.alive).length;
     $('hudInnocents').textContent = remaining;
+    const extra = $('hudExtra');
+    if (currentMode === 'sheriff') {
+      // count of murderers still alive
+      const mAlive = (murderer && murderer.alive) ? 1 : 0;
+      extra.textContent = '🔪 Murderer: ' + mAlive;
+    } else {
+      extra.textContent = '';
+    }
     $('hudCoins').textContent = save.coins;
     const timer = $('hudTimer');
     timer.textContent = Math.max(0, roundTime).toFixed(1);
@@ -602,7 +728,9 @@
       title.textContent = 'VICTORY';
       title.style.color = 'var(--neon-green)';
       title.style.textShadow = '0 0 18px var(--neon-green)';
-      sub.textContent = `All innocents silenced. Win bonus +${bonus}.`;
+      sub.textContent = currentMode === 'sheriff'
+        ? `Murderer caught! Innocents safe. Win bonus +${bonus}.`
+        : `All innocents silenced. Win bonus +${bonus}.`;
       if (killsThisRound > save.best) save.best = killsThisRound;
       SFX.win();
       spawnParticles(player.x, player.y, '#46ff8c', 40, 5);
@@ -712,7 +840,64 @@
     $('menuBest').textContent = save.best;
   }
 
+  // ---------- Easter eggs ----------
+  function rainbowColor() {
+    const h = (performance.now ? performance.now() : Date.now()) / 12 % 360;
+    return `hsl(${h.toFixed(0)},100%,60%)`;
+  }
+  function eggToast(msg) {
+    const el = $('eggToast');
+    el.textContent = msg;
+    el.classList.remove('hidden');
+    clearTimeout(el._t);
+    el._t = setTimeout(() => el.classList.add('hidden'), 2600);
+  }
+  function triggerRainbow() {
+    rainbowKnife = true;
+    eggToast('🌈 RAINBOW KNIFE UNLOCKED! (type "nutella" too?)');
+    SFX.win();
+  }
+  function triggerNutella() {
+    if (!save.ownedKnives.includes('gold')) {
+      save.ownedKnives.push('gold'); save.equippedKnife = 'gold';
+    } else { save.equippedKnife = 'gold'; }
+    persist(); refreshMenuStats();
+    eggToast('🍫 NUTELLA MODE! Golden knife equipped 💜');
+    SFX.coin();
+  }
+  function triggerDisco() {
+    discoMode = !discoMode;
+    eggToast(discoMode ? '🪩 DISCO MODE ON!' : '🪩 Disco off.');
+    if (discoMode) { for (let i=0;i<30;i++) setTimeout(()=>SFX.coin(), i*40); }
+  }
+  function logoConfetti() {
+    const logo = $('logo');
+    if (!logo) return;
+    const rect = logo.getBoundingClientRect();
+    for (let i = 0; i < 40; i++) {
+      const c = document.createElement('div');
+      c.style.cssText = `position:fixed;left:${rect.left + rect.width/2}px;top:${rect.top + rect.height/2}px;width:8px;height:8px;border-radius:2px;background:hsl(${(i*37)%360},100%,60%);z-index:99;pointer-events:none;transition:transform .9s ease-out, opacity .9s;`;
+      document.body.appendChild(c);
+      requestAnimationFrame(() => {
+        const ang = Math.random()*Math.PI*2, d = 80 + Math.random()*180;
+        c.style.transform = `translate(${Math.cos(ang)*d}px, ${Math.sin(ang)*d + 80}px) rotate(${Math.random()*720}deg)`;
+        c.style.opacity = '0';
+      });
+      setTimeout(() => c.remove(), 950);
+    }
+    SFX.win();
+  }
+
   // ---------- Wire up buttons ----------
+  document.querySelectorAll('.mode-btn').forEach(b => {
+    b.onclick = () => {
+      currentMode = b.dataset.mode;
+      document.querySelectorAll('.mode-btn').forEach(x => x.classList.toggle('active', x === b));
+      const tag = $('menuTagline');
+      if (currentMode === 'sheriff') tag.textContent = 'You are the Sheriff. Find and shoot the Murderer. Protect the innocents!';
+      else tag.textContent = 'You are the Murderer. Silence the innocents. Dodge the Sheriff.';
+    };
+  });
   $('btnPlay').onclick = () => { show('game'); ac(); startRound(); };
   $('btnShop').onclick = () => { buildShop(); show('shop'); };
   $('btnMaps').onclick = () => { buildMaps(); show('maps'); };
@@ -726,6 +911,7 @@
   $('btnQuit').onclick = () => { roundActive = false; paused = false; $('pauseOverlay').classList.add('hidden'); refreshMenuStats(); show('menu'); };
   $('btnAgain').onclick = () => { $('resultOverlay').classList.add('hidden'); startRound(); };
   $('btnMenu').onclick = () => { $('resultOverlay').classList.add('hidden'); refreshMenuStats(); show('menu'); };
+  $('logo').onclick = logoConfetti;
 
   // ---------- Init ----------
   resize();

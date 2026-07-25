@@ -12,8 +12,12 @@
     <section id="menu" class="screen active">
       <div class="menu-bg-grid"></div>
       <div class="menu-inner">
-        <h1 class="logo">KNIFE<span>KINGDOM</span></h1>
-        <p class="tagline">You are the Murderer. Silence the innocents. Dodge the Sheriff.</p>
+        <h1 class="logo" id="logo">KNIFE<span>KINGDOM</span></h1>
+        <p class="tagline" id="menuTagline">You are the Murderer. Silence the innocents. Dodge the Sheriff.</p>
+        <div class="mode-select">
+          <button class="mode-btn active" data-mode="murderer">🔪 MURDERER</button>
+          <button class="mode-btn" data-mode="sheriff">🤠 SHERIFF</button>
+        </div>
         <div class="menu-coins">🪙 <span id="menuCoinCount">0</span> coins</div>
         <div class="menu-buttons">
           <button id="btnPlay" class="btn btn-primary">▶ PLAY</button>
@@ -25,7 +29,9 @@
           <span>Rounds won: <b id="menuWins">0</b></span>
           <span>Best kills/round: <b id="menuBest">0</b></span>
         </div>
-        <div class="menu-foot">Made with 🔪 for MM2 lovers · WASD + Mouse</div>
+        <div id="creditBox" class="credit-box">🎮 Built by <a href="https://satya.me" target="_blank" rel="noopener">Satya's AI</a> for his daughter <b>Nutella</b> 💜 &mdash; a huge MM2 / Roblox fan.</div>
+        <div id="eggToast" class="egg-toast hidden"></div>
+        <div class="menu-foot">Made with 🔪 · WASD + Mouse</div>
       </div>
     </section>
 
@@ -35,6 +41,7 @@
       <div id="hud" class="hud">
         <div class="hud-left">
           <div class="hud-pill">🎯 Innocents: <b id="hudInnocents">0</b></div>
+          <div class="hud-pill" id="hudExtra"></div>
           <div class="hud-pill">🪙 <b id="hudCoins">0</b></div>
         </div>
         <div class="hud-center">
@@ -102,13 +109,15 @@
         <button class="btn btn-close" id="btnHowBack">✕</button>
       </div>
       <div class="how-body">
-        <div class="how-row"><span class="key">W A S D</span> Move your murderer around the arena.</div>
+        <div class="how-row"><span class="key">W A S D</span> Move your character around the arena.</div>
         <div class="how-row"><span class="key">MOUSE</span> Aim. Your knife flies where the cursor points.</div>
         <div class="how-row"><span class="key">CLICK / SPACE</span> Throw a knife. Cooldown between throws.</div>
-        <div class="how-row"><span class="key">GOAL</span> Kill <b>every innocent</b> before the timer hits 0.</div>
-        <div class="how-row"><span class="key">⚠ SHERIFF</span> The gold bot sees in a cone. If it spots you it shoots — one hit and you lose. Use crates as cover.</div>
+        <div class="how-row"><span class="key">🔪 / 🤠 MODE</span> Pick <b>MURDERER</b> (kill every innocent) or <b>SHERIFF</b> (find &amp; shoot the red Murderer, protect innocents) before time runs out.</div>
+        <div class="how-row"><span class="key">GOAL</span> Murderer: kill all innocents. Sheriff: catch the Murderer, keep innocents alive.</div>
+        <div class="how-row"><span class="key">⚠ CONE</span> In either mode, whoever holds the gold cone sees in it. Get spotted (as murderer) or miss (as sheriff) at your peril. Crates are cover.</div>
         <div class="how-row"><span class="key">🪙 COINS</span> Earned per kill + win bonus. Spend them on knife skins and maps in the shop.</div>
         <div class="how-row"><span class="key">P</span> Pause · <span class="key">M</span> Mute</div>
+        <div class="how-row"><span class="key">🥚 EGGS</span> Try the <b>Konami code</b> (↑↑↓↓←→←→ B A), type <b>nutella</b>, hold <b>Shift+D</b> for disco, or click the title for confetti.</div>
         <p class="how-tip">Tip: skins are pure drip — they change your knife's color &amp; glowing trail. Flex in the arena.</p>
       </div>
     </section>
