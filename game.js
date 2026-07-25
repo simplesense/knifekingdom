@@ -253,10 +253,13 @@
   }
   window.addEventListener('resize', resize);
 
-  // world->screen transform keeps world centered + scaled to fit
+  // world->screen transform. On touch we use a moderate follow-zoom (clamped) so the
+  // arena stays readable but a follow camera keeps the player in view; on desktop we
+  // fit the whole arena. MOBILE_ZOOM is tunable (was 2.0 -> too zoomed; 1.5 is balanced).
+  const MOBILE_ZOOM = 1.5;
   function worldTransform() {
     const baseScale = Math.min(VIEW.w / WORLD.w, VIEW.h / WORLD.h);
-    const scale = isTouch ? Math.max(baseScale, 2.0) : baseScale; // zoom in on mobile
+    const scale = isTouch ? baseScale * MOBILE_ZOOM : baseScale;
     let ox, oy;
     if (isTouch && player) {
       // follow camera centered on player, clamped within world bounds
@@ -297,12 +300,21 @@
     ctx.restore();
   }
   function toScreen(wx, wy) {
-    const t = worldTransform();
-    return { x: wx * t.scale + t.ox, y: wy * t.scale + t.oy };
+    const p = project(wx, wy, 0);
+    return { x: p.x, y: p.y };
   }
+  // Exact inverse of project() (ground plane, h=0) so mouse/touch aim lines up
+  // with what's drawn — accounts for tilt + camera parallax.
   function screenToWorld(sx, sy) {
     const t = worldTransform();
-    return { x: (sx - t.ox) / t.scale, y: (sy - t.oy) / t.scale };
+    const tilt = camTilt;
+    const look = (player.aim || 0);
+    const camX = Math.sin(look) * 22 + Math.sin(camSway) * 10;
+    const camY = -Math.cos(look) * 10;
+    return {
+      x: (sx - t.ox - camX * t.scale) / t.scale,
+      y: (sy - t.oy - camY * t.scale) / (t.scale * (1 - tilt)),
+    };
   }
 
   // ---------- Helpers ----------
