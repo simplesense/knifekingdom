@@ -106,6 +106,7 @@
   let roundTime = 30;
   let roundActive = false;
   let paused = false;
+  let bannerTimer = 0;       // countdown (ms) for the start banner; 0 = hidden
   let coinsThisRound = 0;
   let killsThisRound = 0;
   let knifeCooldown = 0;
@@ -239,6 +240,14 @@
     const sx = t.clientX - rect.left, sy = t.clientY - rect.top;
     if (sx >= rect.width * 0.45) { mouse.x = sx / rect.width * VIEW.w; mouse.y = sy / rect.height * VIEW.h; }
   }, { passive: false });
+
+  // Start-banner: tap/click anywhere to skip it immediately (so mobile users don't wait)
+  const bannerEl = $('roundBanner');
+  if (bannerEl) {
+    const skipBanner = (e) => { if (bannerTimer > 0) { e.preventDefault(); bannerTimer = 0; bannerEl.classList.add('hidden'); } };
+    bannerEl.addEventListener('touchstart', skipBanner, { passive: false });
+    bannerEl.addEventListener('mousedown', skipBanner);
+  }
 
   // ---------- Sizing ----------
   function resize() {
@@ -426,7 +435,7 @@
     const blvl = banner.querySelector('.banner-level');
     if (blvl) blvl.textContent = `⚡ LEVEL ${diff.level}  ·  ${diff.innocentBonus} extra targets  ·  AI ×${diff.aiSpeedMul.toFixed(2)}  ·  ${diff.time}s`;
     banner.classList.remove('hidden');
-    setTimeout(() => banner.classList.add('hidden'), 1700);
+    bannerTimer = 900;  // auto-dismiss quickly; tap/click skips immediately
     updateHUD();
     resize();
   }
@@ -1022,6 +1031,11 @@
   function loop(ts) {
     rafId = requestAnimationFrame(loop);
     const dt = lastTs ? (ts - lastTs) : 16; lastTs = ts;
+    // start-banner auto-dismiss (tap/click also skips it — see banner listener)
+    if (bannerTimer > 0) {
+      bannerTimer -= dt;
+      if (bannerTimer <= 0) { bannerTimer = 0; const b = $('roundBanner'); if (b) b.classList.add('hidden'); }
+    }
     update();
     render();
   }
