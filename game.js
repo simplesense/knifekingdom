@@ -138,7 +138,7 @@
   let konamiIdx = 0;
   const KONAMI = ['arrowup','arrowup','arrowdown','arrowdown','arrowleft','arrowright','arrowleft','arrowright','b','a'];
   // 3D / camera / effects
-  let camTilt = 0.18;     // vertical foreshorten (vy *= (1-tilt))
+  let camTilt = 0.30;     // vertical foreshorten (vy *= (1-tilt)) -- more pronounced 3D floor
   let camSway = 0;        // gentle camera sway phase
   let blood = { level: 0, slides: [] }; // sheriff-kill gore overlay (level decays; slides drip)
   let shockwaves = [];    // expanding explosion rings
@@ -698,6 +698,13 @@
 
     const S = (wx, wy, h = 0) => project(wx, wy, h);
     const sc = t.scale;
+    // collision-clarity helper: draw a floor hit-radius ring (faint) for any entity
+    const ringAt = (e, col) => {
+      const p = S(e.x, e.y);
+      ctx.save(); ctx.globalAlpha = 0.28; ctx.strokeStyle = col; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.ellipse(p.x, p.y, e.r*sc, e.r*sc*(1-camTilt), 0, 0, Math.PI*2); ctx.stroke();
+      ctx.restore();
+    };
 
     // vision cone: AI sheriff (murderer mode) OR player sheriff (sheriff mode)
     const coneOwner = (currentMode === 'murderer') ? sheriff : (player.alive ? player : null);
@@ -717,71 +724,50 @@
       ctx.restore();
     }
 
-    // crates (drawn as 3D boxes: shadow + body + raised top face)
+    // buildings (detailed 3D structures; collision = their footprint)
     for (const c of crates) {
       const g = S(c.x + c.w/2, c.y + c.h/2);
       const ww = c.w * sc, hh = c.h * sc;
-      const lift = 14 * sc; // box height
+      const lift = 18 * sc;
       drawShadow(ctx, g.x, g.y, Math.max(ww, hh) * 0.5);
-      // side
-      ctx.fillStyle = 'rgba(40,20,60,0.95)';
-      ctx.beginPath();
-      ctx.moveTo(g.x - ww/2, g.y - hh/2); ctx.lineTo(g.x + ww/2, g.y - hh/2);
-      ctx.lineTo(g.x + ww/2, g.y + hh/2 - lift); ctx.lineTo(g.x - ww/2, g.y + hh/2 - lift);
-      ctx.closePath(); ctx.fill();
-      // top face
-      ctx.fillStyle = 'rgba(60,30,90,0.95)';
-      ctx.strokeStyle = 'rgba(177,75,255,0.7)'; ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(g.x - ww/2, g.y - hh/2 - lift);
-      ctx.lineTo(g.x + ww/2, g.y - hh/2 - lift);
-      ctx.lineTo(g.x + ww/2, g.y + hh/2 - lift);
-      ctx.lineTo(g.x - ww/2, g.y + hh/2 - lift);
-      ctx.closePath(); ctx.fill(); ctx.stroke();
+      drawBuilding(g.x, g.y, ww, hh, lift, '#241634', shade('#241634', 0.25), 'rgba(177,75,255,0.85)');
+      // collision footprint ring (clarity): outline the blocking area on the floor
+      ctx.save();
+      ctx.globalAlpha = 0.25; ctx.strokeStyle = 'rgba(255,80,120,0.9)'; ctx.lineWidth = 2;
+      ctx.strokeRect(g.x - ww/2, g.y - hh/2, ww, hh);
+      ctx.restore();
     }
 
-    // innocents (with ground shadow; lifted body)
+    // collision clarity: faint floor rings showing each entity's hit radius
+    const ringAt2 = (e, col) => { const p = S(e.x, e.y); ctx.strokeStyle = col || 'rgba(33,230,255,0.8)'; ctx.beginPath(); ctx.ellipse(p.x, p.y, e.r*sc, e.r*sc*(1-camTilt), 0, 0, Math.PI*2); ctx.stroke(); };
+
+    // innocents (civilians) — detailed figures
     for (const inn of innocents) {
       if (!inn.alive) continue;
       const g = S(inn.x, inn.y);
       drawShadow(ctx, g.x, g.y, inn.r * sc);
-      const p = S(inn.x, inn.y, 10);
-      ctx.fillStyle = '#8be0ff';
-      ctx.strokeStyle = '#21e6ff'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(p.x, p.y, inn.r * sc, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-      // little head dot
-      ctx.fillStyle = '#cbf6ff';
-      ctx.beginPath(); ctx.arc(p.x, p.y - inn.r*sc*0.4, inn.r*sc*0.35, 0, Math.PI*2); ctx.fill();
+      ringAt(inn, 'rgba(33,230,255,0.6)');
+      drawFigure(g.x, g.y, inn.r*sc, 26*sc, { body: '#9fe7ff', coat: '#1f5f86', skin: '#ffd9b8', hair: '#6b4a2a' });
     }
 
-    // sheriff (AI, murderer mode)
+    // sheriff (AI, murderer mode) — cowboy hat + star badge
     if (sheriff) {
       const g = S(sheriff.x, sheriff.y);
       drawShadow(ctx, g.x, g.y, sheriff.r * sc);
-      const p = S(sheriff.x, sheriff.y, 12);
-      ctx.fillStyle = '#ffd54a';
-      ctx.strokeStyle = '#fff0a8'; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(p.x, p.y, sheriff.r * sc, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-      ctx.fillStyle = '#3a2a00'; drawStar(p.x, p.y, 5, sheriff.r*sc*0.6, sheriff.r*sc*0.28);
+      ringAt(sheriff, 'rgba(255,213,74,0.85)');
+      drawFigure(g.x, g.y, sheriff.r*sc, 30*sc, { body: '#ffe08a', coat: '#7a5a1e', skin: '#ffd9b8', hat: 'sheriff', badge: true, glow: 'rgba(255,213,74,0.5)' });
       if (sheriff.alert > 0.5) {
-        ctx.fillStyle = '#ff3b3b'; ctx.font = `${Math.round(16*sc*1.4)}px sans-serif`; ctx.textAlign = 'center';
-        ctx.fillText('!', p.x, p.y - sheriff.r*sc - 6);
+        ctx.fillStyle = '#ff3b3b'; ctx.font = `${Math.round(20*sc)}px sans-serif`; ctx.textAlign = 'center';
+        ctx.fillText('!', g.x, g.y - 44*sc);
       }
     }
 
-    // murderer (AI, sheriff mode)
+    // murderer (AI, sheriff mode) — hooded figure with glowing eyes
     if (murderer && murderer.alive) {
       const g = S(murderer.x, murderer.y);
       drawShadow(ctx, g.x, g.y, murderer.r * sc);
-      const p = S(murderer.x, murderer.y, 12);
-      ctx.shadowColor = '#ff2e88'; ctx.shadowBlur = 16 * sc;
-      ctx.fillStyle = '#1a1024'; ctx.strokeStyle = '#ff2e88'; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(p.x, p.y, murderer.r * sc, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-      ctx.shadowBlur = 0;
-      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(murderer.dir);
-      ctx.fillStyle = '#ff2e88';
-      ctx.beginPath(); ctx.moveTo(murderer.r*sc*0.9, 0); ctx.lineTo(murderer.r*sc*0.2, -3*sc); ctx.lineTo(murderer.r*sc*0.2, 3*sc); ctx.closePath(); ctx.fill();
-      ctx.restore();
+      ringAt(murderer, 'rgba(255,46,136,0.85)');
+      drawFigure(g.x, g.y, murderer.r*sc, 30*sc, { body: '#2a1638', coat: '#170d22', skin: '#caa', hat: 'hood', glow: '#ff2e88' });
     }
 
     // knives (lifted slightly for 3D feel)
@@ -799,28 +785,26 @@
       ctx.restore();
     }
 
-    // player — draw according to role (with shadow + lift)
+    // player — detailed figure according to role (with shadow, collision ring, lifted)
     if (player.alive) {
       const g = S(player.x, player.y);
       drawShadow(ctx, g.x, g.y, player.r * sc);
-      const p = S(player.x, player.y, 12);
+      ringAt(player, currentMode === 'sheriff' ? 'rgba(255,213,74,0.9)' : 'rgba(255,46,136,0.9)');
       const k = KNIVES[save.equippedKnife] || KNIVES.crimson;
       const knifeColor = rainbowKnife ? rainbowColor() : k.color;
       const knifeTrail = rainbowKnife ? rainbowColor() : k.trail;
-      ctx.shadowColor = knifeTrail; ctx.shadowBlur = 18 * sc;
       if (currentMode === 'sheriff') {
-        ctx.fillStyle = '#ffd54a'; ctx.strokeStyle = '#fff0a8'; ctx.lineWidth = 3;
-        ctx.beginPath(); ctx.arc(p.x, p.y, player.r * sc, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-        ctx.shadowBlur = 0; ctx.fillStyle = '#3a2a00'; drawStar(p.x, p.y, 5, player.r*sc*0.6, player.r*sc*0.28);
+        drawFigure(g.x, g.y, player.r*sc, 30*sc, { body: '#ffe08a', coat: '#7a5a1e', skin: '#ffd9b8', hat: 'sheriff', badge: true, glow: 'rgba(255,213,74,0.5)' });
       } else {
-        ctx.fillStyle = '#1a1024'; ctx.strokeStyle = knifeColor; ctx.lineWidth = 3;
-        ctx.beginPath(); ctx.arc(p.x, p.y, player.r * sc, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-        ctx.shadowBlur = 0;
-        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(player.aim);
-        ctx.fillStyle = knifeColor; ctx.shadowColor = knifeTrail; ctx.shadowBlur = 10*sc;
-        ctx.beginPath(); ctx.moveTo(player.r*sc*0.9, 0); ctx.lineTo(player.r*sc*0.2, -3*sc); ctx.lineTo(player.r*sc*0.2, 3*sc); ctx.closePath(); ctx.fill();
-        ctx.restore();
+        drawFigure(g.x, g.y, player.r*sc, 30*sc, { body: '#2a1638', coat: '#170d22', skin: '#caa', hat: 'hood', glow: knifeColor });
       }
+      // held knife in aim direction
+      ctx.save(); ctx.translate(g.x, g.y - 30*sc*0.9); ctx.rotate(player.aim);
+      ctx.shadowColor = knifeTrail; ctx.shadowBlur = 12*sc;
+      ctx.fillStyle = knifeColor;
+      const L = 22*sc, Wd = 7*sc;
+      ctx.beginPath(); ctx.moveTo(L*0.7, 0); ctx.lineTo(-L*0.2, -Wd/2); ctx.lineTo(-L*0.4, 0); ctx.lineTo(-L*0.2, Wd/2); ctx.closePath(); ctx.fill();
+      ctx.restore();
     }
 
     // shockwaves (expanding explosion rings)
@@ -903,6 +887,100 @@
       rot += step; ctx.lineTo(cx + Math.cos(rot)*outer, cy + Math.sin(rot)*outer);
     }
     ctx.closePath(); ctx.fill();
+  }
+
+  // ---- Advanced 3D character illustrations ----
+  // Draws a "paper-doll" figure standing with height, facing dir, lifted by h.
+  function drawFigure(x, y, rPx, hPx, opts) {
+    // opts: {body, coat, skin, hat, badge, glow, facing, panicking}
+    const s = opts || {};
+    const body = s.body || '#8be0ff';
+    const coat = s.coat || '#3a2a66';
+    const skin = s.skin || '#ffd9b8';
+    ctx.save();
+    // legs
+    ctx.strokeStyle = coat; ctx.lineWidth = Math.max(2, rPx*0.5); ctx.lineCap='round';
+    ctx.beginPath();
+    ctx.moveTo(x - rPx*0.5, y); ctx.lineTo(x - rPx*0.5, y + hPx*0.55);
+    ctx.moveTo(x + rPx*0.5, y); ctx.lineTo(x + rPx*0.5, y + hPx*0.55);
+    ctx.stroke();
+    // torso (coat)
+    ctx.fillStyle = body; ctx.strokeStyle = s.glow || 'rgba(0,0,0,0.4)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(x - rPx*0.95, y);
+    ctx.quadraticCurveTo(x, y - hPx*1.1, x + rPx*0.95, y);
+    ctx.closePath(); ctx.fill();
+    if (s.coat) { ctx.fillStyle = coat; ctx.beginPath();
+      ctx.moveTo(x - rPx*0.95, y); ctx.lineTo(x, y - hPx*0.2); ctx.lineTo(x + rPx*0.95, y);
+      ctx.lineTo(x + rPx*0.7, y + hPx*0.5); ctx.lineTo(x - rPx*0.7, y + hPx*0.5); ctx.closePath(); ctx.fill(); }
+    // head
+    const hx = x, hy = y - hPx*1.15;
+    ctx.fillStyle = skin; ctx.beginPath(); ctx.arc(hx, hy, rPx*0.55, 0, Math.PI*2); ctx.fill();
+    // hat / hair
+    if (s.hat === 'sheriff') {
+      ctx.fillStyle = '#5a3a12'; ctx.beginPath();
+      ctx.ellipse(hx, hy - rPx*0.35, rPx*0.85, rPx*0.35, 0, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#6a4a1a'; ctx.fillRect(hx - rPx*0.45, hy - rPx*0.95, rPx*0.9, rPx*0.6);
+      ctx.fillStyle = '#ffd54a'; ctx.beginPath(); ctx.arc(hx, hy - rPx*0.65, rPx*0.22, 0, Math.PI*2); ctx.fill(); // badge-star
+    } else if (s.hat === 'hood') {
+      ctx.fillStyle = '#170d22'; ctx.beginPath();
+      ctx.arc(hx, hy - rPx*0.1, rPx*0.72, Math.PI, 0); ctx.fill();
+      ctx.fillStyle = '#2a1638'; ctx.beginPath(); ctx.ellipse(hx, hy, rPx*0.6, rPx*0.4, 0, 0, Math.PI*2); ctx.fill();
+      // glowing eyes
+      ctx.fillStyle = s.glow || '#ff2e88';
+      ctx.beginPath(); ctx.arc(hx - rPx*0.22, hy - rPx*0.05, rPx*0.1, 0, Math.PI*2); ctx.arc(hx + rPx*0.22, hy - rPx*0.05, rPx*0.1, 0, Math.PI*2); ctx.fill();
+    } else {
+      ctx.fillStyle = s.hair || '#6b4a2a'; ctx.beginPath(); ctx.arc(hx, hy - rPx*0.3, rPx*0.6, Math.PI, 0); ctx.fill();
+    }
+    // badge on chest (sheriff)
+    if (s.badge) {
+      ctx.fillStyle = '#ffd54a'; drawStar(hx, y - hPx*0.55, 5, rPx*0.4, rPx*0.18);
+      ctx.strokeStyle = '#3a2a00'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(hx, y - hPx*0.55, rPx*0.42, 0, Math.PI*2); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // 3D building: extruded box with shaded faces, windows, optional roof.
+  function drawBuilding(gx, gy, ww, hh, lift, faceColor, topColor, lineColor) {
+    const x = gx - ww/2, y = gy - hh/2;
+    // front face
+    ctx.fillStyle = faceColor;
+    ctx.fillRect(x, y - lift, ww, hh);
+    // side face (right) for depth
+    const dep = lift * 0.9;
+    ctx.fillStyle = shade(faceColor, -0.35);
+    ctx.beginPath();
+    ctx.moveTo(x + ww, y - lift); ctx.lineTo(x + ww + dep*0.5, y - lift - dep*0.5);
+    ctx.lineTo(x + ww + dep*0.5, y + hh - lift - dep*0.5); ctx.lineTo(x + ww, y + hh - lift);
+    ctx.closePath(); ctx.fill();
+    // top face
+    ctx.fillStyle = topColor;
+    ctx.beginPath();
+    ctx.moveTo(x, y - lift); ctx.lineTo(x + dep*0.5, y - lift - dep*0.5);
+    ctx.lineTo(x + ww + dep*0.5, y - lift - dep*0.5); ctx.lineTo(x + ww, y - lift);
+    ctx.closePath(); ctx.fill();
+    // windows
+    ctx.fillStyle = 'rgba(33,230,255,0.25)';
+    const cols = Math.max(1, Math.floor(ww / 26)), rows = Math.max(1, Math.floor(hh / 30));
+    for (let cx = 0; cx < cols; cx++) for (let cy = 0; cy < rows; cy++) {
+      const wx = x + 8 + cx * (ww - 16) / cols, wy = y - lift + 8 + cy * (hh - 16) / rows;
+      ctx.fillRect(wx, wy, (ww - 16) / cols - 6, (hh - 16) / rows - 6);
+    }
+    // outline
+    ctx.strokeStyle = lineColor; ctx.lineWidth = 2;
+    ctx.strokeRect(x, y - lift, ww, hh);
+    ctx.beginPath();
+    ctx.moveTo(x, y - lift); ctx.lineTo(x + dep*0.5, y - lift - dep*0.5);
+    ctx.lineTo(x + ww + dep*0.5, y - lift - dep*0.5); ctx.lineTo(x + ww, y - lift);
+    ctx.stroke();
+  }
+  // darken/lighten a hex color by amt (-1..1)
+  function shade(hex, amt) {
+    const c = hex.replace('#',''); const n = parseInt(c.length===3 ? c.split('').map(x=>x+x).join(''):c, 16);
+    let r=(n>>16)&255, g=(n>>8)&255, b=n&255;
+    r=clamp(Math.round(r+(amt<0?r:255-r)*amt),0,255); g=clamp(Math.round(g+(amt<0?g:255-g)*amt),0,255); b=clamp(Math.round(b+(amt<0?b:255-b)*amt),0,255);
+    return `rgb(${r},${g},${b})`;
   }
 
   // ---------- HUD ----------
