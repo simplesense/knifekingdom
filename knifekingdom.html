@@ -90,7 +90,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 
 /* ---------------- GAME / CANVAS ---------------- */
 #game { background: #070310; }
-#canvas { display: block; width: 100%; height: 100%; height: 100dvh; touch-action: none; }
+#canvas { display: block; width: 100%; height: 100%; touch-action: none; }
 
 .hud { position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: flex-start; padding: 14px 16px; pointer-events: none; z-index: 5; }
 .hud-left, .hud-right { display: flex; gap: 10px; align-items: center; }
@@ -610,7 +610,10 @@ body.touch #game.active .touch-hint { display: block; }
   }
   window.addEventListener('resize', resize);
   // Re-sync when iOS shows/hides its browser chrome (visualViewport change).
-  if (typeof VisualViewport !== 'undefined') {
+  // Guard BOTH existence AND addEventListener being callable: some engines expose
+  // a VisualViewport object that is NOT an EventTarget, so calling addEventListener
+  // would throw and kill the whole game init.
+  if (VisualViewport && typeof VisualViewport.addEventListener === 'function') {
     VisualViewport.addEventListener('resize', resize);
     VisualViewport.addEventListener('scroll', resize);
   }

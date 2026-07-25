@@ -265,7 +265,10 @@
   }
   window.addEventListener('resize', resize);
   // Re-sync when iOS shows/hides its browser chrome (visualViewport change).
-  if (typeof VisualViewport !== 'undefined') {
+  // Guard BOTH existence AND addEventListener being callable: some engines expose
+  // a VisualViewport object that is NOT an EventTarget, so calling addEventListener
+  // would throw and kill the whole game init.
+  if (VisualViewport && typeof VisualViewport.addEventListener === 'function') {
     VisualViewport.addEventListener('resize', resize);
     VisualViewport.addEventListener('scroll', resize);
   }

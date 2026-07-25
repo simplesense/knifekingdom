@@ -1,0 +1,23 @@
+{
+  "name": "knifekingdom",
+  "version": "1.0.0",
+  "description": "A top-down, browser-based **Murder Mystery 2**-style game. You are the Murderer: sneak around neon arenas, throw knives at innocent bots, and avoid the Sheriff's vision cone. Earn coins, collect knife skins, unlock maps.",
+  "main": "game.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/simplesense/knifekingdom.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/simplesense/knifekingdom/issues"
+  },
+  "homepage": "https://github.com/simplesense/knifekingdom#readme",
+  "dependencies": {
+    "puppeteer-core": "^25.3.0"
+  }
+}
