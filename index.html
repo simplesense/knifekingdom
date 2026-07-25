@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>KNIFE KINGDOM — Murder Mystery Arena</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- ===================== MENU ===================== -->
+    <section id="menu" class="screen active">
+      <div class="menu-bg-grid"></div>
+      <div class="menu-inner">
+        <h1 class="logo">KNIFE<span>KINGDOM</span></h1>
+        <p class="tagline">You are the Murderer. Silence the innocents. Dodge the Sheriff.</p>
+        <div class="menu-coins">🪙 <span id="menuCoinCount">0</span> coins</div>
+        <div class="menu-buttons">
+          <button id="btnPlay" class="btn btn-primary">▶ PLAY</button>
+          <button id="btnShop" class="btn">🔪 KNIFE SHOP</button>
+          <button id="btnMaps" class="btn">🗺 MAPS</button>
+          <button id="btnHow" class="btn">❔ HOW TO PLAY</button>
+        </div>
+        <div class="menu-stats">
+          <span>Rounds won: <b id="menuWins">0</b></span>
+          <span>Best kills/round: <b id="menuBest">0</b></span>
+        </div>
+        <div class="menu-foot">Made with 🔪 for MM2 lovers · WASD + Mouse</div>
+      </div>
+    </section>
+
+    <!-- ===================== GAME ===================== -->
+    <section id="game" class="screen">
+      <canvas id="canvas"></canvas>
+      <div id="hud" class="hud">
+        <div class="hud-left">
+          <div class="hud-pill">🎯 Innocents: <b id="hudInnocents">0</b></div>
+          <div class="hud-pill">🪙 <b id="hudCoins">0</b></div>
+        </div>
+        <div class="hud-center">
+          <div class="hud-timer" id="hudTimer">30.0</div>
+        </div>
+        <div class="hud-right">
+          <div class="hud-pill" id="hudCool">🔪 READY</div>
+          <button id="btnMute" class="hud-btn">🔊</button>
+          <button id="btnPause" class="hud-btn">⏸</button>
+        </div>
+      </div>
+
+      <!-- Round start banner -->
+      <div id="roundBanner" class="banner hidden">
+        <div class="banner-role">YOU ARE THE</div>
+        <div class="banner-title">MURDERER</div>
+        <div class="banner-sub">Eliminate all innocents. Avoid the Sheriff's sight.</div>
+      </div>
+
+      <!-- Pause -->
+      <div id="pauseOverlay" class="overlay hidden">
+        <div class="panel">
+          <h2>PAUSED</h2>
+          <button class="btn btn-primary" id="btnResume">Resume</button>
+          <button class="btn" id="btnQuit">Quit to Menu</button>
+        </div>
+      </div>
+
+      <!-- Result -->
+      <div id="resultOverlay" class="overlay hidden">
+        <div class="panel">
+          <h2 id="resultTitle">VICTORY</h2>
+          <p id="resultSub"></p>
+          <div class="result-coins">🪙 +<span id="resultCoins">0</span> coins</div>
+          <button class="btn btn-primary" id="btnAgain">Play Again</button>
+          <button class="btn" id="btnMenu">Menu</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== SHOP ===================== -->
+    <section id="shop" class="screen">
+      <div class="modal-head">
+        <h2>🔪 KNIFE SHOP</h2>
+        <div class="menu-coins">🪙 <span id="shopCoinCount">0</span></div>
+        <button class="btn btn-close" id="btnShopBack">✕</button>
+      </div>
+      <div id="shopGrid" class="grid"></div>
+    </section>
+
+    <!-- ===================== MAPS ===================== -->
+    <section id="maps" class="screen">
+      <div class="modal-head">
+        <h2>🗺 MAPS</h2>
+        <div class="menu-coins">🪙 <span id="mapsCoinCount">0</span></div>
+        <button class="btn btn-close" id="btnMapsBack">✕</button>
+      </div>
+      <div id="mapsGrid" class="grid"></div>
+    </section>
+
+    <!-- ===================== HOW TO ===================== -->
+    <section id="how" class="screen">
+      <div class="modal-head">
+        <h2>❔ HOW TO PLAY</h2>
+        <button class="btn btn-close" id="btnHowBack">✕</button>
+      </div>
+      <div class="how-body">
+        <div class="how-row"><span class="key">W A S D</span> Move your murderer around the arena.</div>
+        <div class="how-row"><span class="key">MOUSE</span> Aim. Your knife flies where the cursor points.</div>
+        <div class="how-row"><span class="key">CLICK / SPACE</span> Throw a knife. Cooldown between throws.</div>
+        <div class="how-row"><span class="key">GOAL</span> Kill <b>every innocent</b> before the timer hits 0.</div>
+        <div class="how-row"><span class="key">⚠ SHERIFF</span> The gold bot sees in a cone. If it spots you it shoots — one hit and you lose. Use crates as cover.</div>
+        <div class="how-row"><span class="key">🪙 COINS</span> Earned per kill + win bonus. Spend them on knife skins and maps in the shop.</div>
+        <div class="how-row"><span class="key">P</span> Pause · <span class="key">M</span> Mute</div>
+        <p class="how-tip">Tip: skins are pure drip — they change your knife's color &amp; glowing trail. Flex in the arena.</p>
+      </div>
+    </section>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
