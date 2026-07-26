@@ -645,7 +645,12 @@ body.touch #game.active .touch-hint { display: block; }
     const my = (e.clientY - rect.top) / rect.height * VIEW.h;
     mouse.x = mx; mouse.y = my;
   });
-  canvas.addEventListener('mousedown', (e) => { if (e.button === 0) { mouse.down = true; if (roundActive && !paused) throwKnife(); } });
+  canvas.addEventListener('mousedown', (e) => {
+    if (e.button === 0) {
+      mouse.down = true;
+      if (roundActive && !paused) { player.aim = angleTo(player, screenToWorld(mouse.x, mouse.y)); throwKnife(); }
+    }
+  });
   canvas.addEventListener('mouseup', () => { mouse.down = false; });
   // ---------- Mobile / touch controls ----------
   if (isTouch) document.body.classList.add('touch');
@@ -700,13 +705,20 @@ body.touch #game.active .touch-hint { display: block; }
       return;
     }
     mouse.x = sx / rect.width * VIEW.w; mouse.y = sy / rect.height * VIEW.h;
+    // Update player.aim synchronously (not just mouse.x/y) so this tap's throw --
+    // fired immediately below, before the next update() tick would otherwise
+    // recompute it -- already matches where you just tapped.
+    player.aim = angleTo(player, screenToWorld(mouse.x, mouse.y));
     if (roundActive && !paused) throwKnife();
   }, { passive: false });
   canvas.addEventListener('touchmove', (e) => {
     e.preventDefault();
     const t = e.changedTouches[0]; const rect = canvas.getBoundingClientRect();
     const sx = t.clientX - rect.left, sy = t.clientY - rect.top;
-    if (sx >= rect.width * 0.45) { mouse.x = sx / rect.width * VIEW.w; mouse.y = sy / rect.height * VIEW.h; }
+    if (sx >= rect.width * 0.45) {
+      mouse.x = sx / rect.width * VIEW.w; mouse.y = sy / rect.height * VIEW.h;
+      player.aim = angleTo(player, screenToWorld(mouse.x, mouse.y));
+    }
   }, { passive: false });
 
   // Start-banner: tap/click anywhere to skip it immediately (so mobile users don't wait)
@@ -919,7 +931,7 @@ body.touch #game.active .touch-hint { display: block; }
       sheriff = { x: sp.x, y: sp.y, r: 16, alive: true, dir: rand(0, Math.PI*2), turn: rand(30,90), alert: 0, shootCd: 0, speedMul: diff.aiSpeedMul };
     } else {
       const mp = pts[count];
-      murderer = { x: mp.x, y: mp.y, r: 16, alive: true, dir: rand(0, Math.PI*2), turn: rand(40,100), recharge: 0, wander: rand(0,Math.PI*2), wt: rand(40,90), speedMul: diff.aiSpeedMul };
+      murderer = { x: mp.x, y: mp.y, r: 16, alive: true, dir: rand(0, Math.PI*2), recharge: 0, wander: rand(0,Math.PI*2), wt: rand(40,90), speedMul: diff.aiSpeedMul };
     }
 
     roundActive = true; paused = false;
@@ -948,8 +960,14 @@ body.touch #game.active .touch-hint { display: block; }
   // ---------- Knife throw ----------
   function throwKnife() {
     if (knifeCooldown > 0 || !player.alive) return;
-    const w = screenToWorld(mouse.x, mouse.y);
-    const ang = angleTo(player, w);
+    // Always throw toward player.aim -- the SAME value the held-knife sprite and
+    // the vision cone are drawn with -- instead of independently recomputing from
+    // mouse.x/y. Recomputing separately here used to let the two disagree: e.g. on
+    // touch, moving via the joystick correctly turns player.aim to face your
+    // movement direction, but mouse.x/y only changes when you tap the canvas --
+    // so hitting SHOOT without a fresh tap threw toward a stale/unrelated point
+    // instead of the direction you were visibly aiming/moving.
+    const ang = player.aim;
     const k = KNIVES[save.equippedKnife] || KNIVES.crimson;
     knives.push({ x: player.x, y: player.y, vx: Math.cos(ang) * 12, vy: Math.sin(ang) * 12, r: 7, life: 90, color: k.color, trail: k.trail, from: 'player' });
     knifeCooldown = COOLDOWN_MAX;
@@ -1062,14 +1080,15 @@ body.touch #game.active .touch-hint { display: block; }
     if (!hitsCrate(nx, player.y, player.r)) player.x = nx;
     if (!hitsCrate(player.x, ny, player.r)) player.y = ny;
     // aim
-    if (isTouch && (joy.active && (joy.dx || joy.dy))) {
+    if (isTouch && joy.active && (joy.dx || joy.dy)) {
       // on touch with joystick pushed, aim where you're heading (auto-aim forward)
       player.aim = Math.atan2(dy, dx);
-    } else if (!isTouch) {
+    } else {
+      // desktop mouse (kept live by mousemove), or touch without joystick movement
+      // (kept live by the right-side canvas touchstart/touchmove handlers, which
+      // update player.aim directly for the same reason -- see throwKnife()).
       const w = screenToWorld(mouse.x, mouse.y);
       player.aim = angleTo(player, w);
-    } else if (firing) {
-      // hold fire on touch: keep throwing straight ahead (player.aim unchanged)
     }
     // auto-fire while the fire button is held
     if (firing && knifeCooldown <= 0 && player.alive) throwKnife();
@@ -1131,8 +1150,6 @@ body.touch #game.active .touch-hint { display: block; }
 
     // --- murderer AI (sheriff mode): hunt innocents, snipe sheriff when safe ---
     if (murderer && murderer.alive) {
-      murderer.turn--;
-      if (murderer.turn <= 0) { murderer.dir += rand(-1.0, 1.0); murderer.turn = rand(40, 100); }
       // chase nearest innocent, or flee from sheriff cone
       let target = null, best = 1e9;
       for (const inn of innocents) { if (!inn.alive) continue; const d = dist(murderer, inn); if (d < best) { best = d; target = inn; } }
@@ -1150,10 +1167,15 @@ body.touch #game.active .touch-hint { display: block; }
       const my = clamp(murderer.y + Math.sin(goalAng)*msp, 18, WORLD.h-18);
       if (!hitsCrate(mx, murderer.y, murderer.r)) murderer.x = mx;
       if (!hitsCrate(murderer.x, my, murderer.r)) murderer.y = my;
+      // Face the direction actually being moved -- replaces the old periodic random
+      // turn, which was fully disconnected from movement/throw direction and made
+      // the character visibly face one way while moving/throwing another.
+      murderer.dir = goalAng;
       // throw knives at nearest innocent when off cooldown
       if (murderer.recharge > 0) murderer.recharge--;
       else if (target) {
         const ka = angleTo(murderer, target);
+        murderer.dir = ka; // snap to face the throw direction at the moment of throwing
         knives.push({ x: murderer.x, y: murderer.y, vx: Math.cos(ka)*9, vy: Math.sin(ka)*9, r: 7, life: 80, color: '#ff2e88', trail: '#ff8ab8', from: 'murderer' });
         murderer.recharge = 40;
       }
