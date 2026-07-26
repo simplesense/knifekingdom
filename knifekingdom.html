@@ -768,9 +768,16 @@ body.touch #game.active .touch-hint { display: block; }
     }
     let ox, oy;
     if (isTouch && player) {
-      // follow camera centered on player, clamped within world bounds
-      const camX = WORLD.w * scale / 2 - player.x * scale;
-      const camY = WORLD.h * (1 - camTilt) * scale / 2 - player.y * (1 - camTilt) * scale;
+      // Follow camera centered on player, clamped within world bounds.
+      // camX/camY must target the actual SCREEN center (VIEW.w/2, VIEW.h/2) --
+      // using a WORLD-space anchor (WORLD.w*scale/2) here was a longstanding bug:
+      // it only happened to land near screen-center when scale ~= VIEW.w/WORLD.w,
+      // and got dramatically worse once the mobile zoom floor (coverScale, above)
+      // pushed scale much higher on tall/narrow phones -- the player ended up
+      // pinned near/beyond the screen edge almost everywhere except exact map
+      // center, instead of staying centered wherever the world bounds allow it.
+      const camX = VIEW.w / 2 - player.x * scale;
+      const camY = VIEW.h / 2 - player.y * (1 - camTilt) * scale;
       const minOx = VIEW.w - WORLD.w * scale, maxOx = 0;
       const minOy = VIEW.h - WORLD.h * (1 - camTilt) * scale, maxOy = 0;
       ox = Math.min(maxOx, Math.max(minOx, camX));
