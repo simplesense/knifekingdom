@@ -50,6 +50,14 @@
     sunset: { name: 'Sunset Yard',  price: 2000, desc: 'Warm arena, lots of running room.', bg: '#1a0a18', grid: 'rgba(255,122,24,0.12)', crates: 9 },
   };
 
+  // Outfit palettes for innocent crowd variety — index selected by innocent.variant
+  const INNOCENT_OUTFITS = [
+    { body: '#9fe7ff', coat: '#1f5f86', skin: '#ffd9b8', hair: '#6b4a2a' }, // cyan civilian
+    { body: '#d9b8ff', coat: '#5a3a8a', skin: '#e8b894', hair: '#2a1638' }, // purple civilian (ponytail)
+    { body: '#ffe6a8', coat: '#8a6a1e', skin: '#ffd9b8', hair: '#3a2a1a' }, // gold civilian (flat cap)
+    { body: '#b8ffcf', coat: '#1f6b46', skin: '#e8b894', hair: '#4a3a2a' }, // green civilian (bandana)
+  ];
+
   // ---------- DOM ----------
   const $ = (id) => document.getElementById(id);
   const screens = { menu: $('menu'), game: $('game'), shop: $('shop'), maps: $('maps'), how: $('how') };
@@ -69,27 +77,123 @@
     }
     return audioCtx;
   }
-  function beep(freq, dur, type = 'sine', vol = 0.18, slideTo = null) {
-    if (save.muted) return;
-    const a = ac(); if (!a) return;
-    const o = a.createOscillator();
+  // Small helper: shared oscillator voice with a real attack + exponential decay envelope
+  // (not just a flat decay from full volume) — punchier than a single ramp. `at` lets
+  // callers schedule several notes against one shared AudioContext clock instead of
+  // setTimeout, so multi-note cues (win/lose) stay tight.
+  function tone(a, o) {
+    if (!a || save.muted) return;
+    const { freq, dur, type = 'sine', vol = 0.18, slideTo = null, attack = 0.004, at = null, detune = 0 } = o;
+    const t0 = at != null ? at : a.currentTime;
+    const atk = Math.min(attack, dur * 0.5) || 0.002;
+    const osc = a.createOscillator();
     const g = a.createGain();
-    o.type = type;
-    o.frequency.setValueAtTime(freq, a.currentTime);
-    if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, a.currentTime + dur);
-    g.gain.setValueAtTime(vol, a.currentTime);
-    g.gain.exponentialRampToValueAtTime(0.0001, a.currentTime + dur);
-    o.connect(g); g.connect(a.destination);
-    o.start(); o.stop(a.currentTime + dur);
+    osc.type = type;
+    if (detune) osc.detune.setValueAtTime(detune, t0);
+    osc.frequency.setValueAtTime(freq, t0);
+    if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol, t0 + atk);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    osc.connect(g); g.connect(a.destination);
+    osc.start(t0); osc.stop(t0 + dur + 0.03);
+  }
+  // One shared white-noise buffer (generated once, ~0.5s, reused via random-offset
+  // slices) so impact/noise cues never allocate a fresh sample array per call.
+  let _noiseBuf = null;
+  function noiseBuf(a) {
+    if (_noiseBuf) return _noiseBuf;
+    const len = Math.floor(a.sampleRate * 0.5);
+    _noiseBuf = a.createBuffer(1, len, a.sampleRate);
+    const d = _noiseBuf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    return _noiseBuf;
+  }
+  // Filtered noise burst (thwacks, crackle, rumble) with its own gain envelope and an
+  // optional filter-frequency sweep for character (e.g. a falling thud).
+  function noiseBurst(a, o) {
+    if (!a || save.muted) return;
+    const { dur = 0.08, vol = 0.15, filterType = 'bandpass', freqStart = 1500, freqEnd = null, q = 1, at = null } = o;
+    const t0 = at != null ? at : a.currentTime;
+    const buf = noiseBuf(a);
+    const src = a.createBufferSource();
+    src.buffer = buf;
+    const filt = a.createBiquadFilter();
+    filt.type = filterType;
+    filt.Q.value = q;
+    filt.frequency.setValueAtTime(freqStart, t0);
+    if (freqEnd != null && freqEnd !== freqStart) filt.frequency.exponentialRampToValueAtTime(Math.max(20, freqEnd), t0 + dur);
+    const g = a.createGain();
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    src.connect(filt); filt.connect(g); g.connect(a.destination);
+    const off = Math.random() * Math.max(0.01, buf.duration - dur - 0.02);
+    src.start(t0, off, dur + 0.02);
   }
   const SFX = {
-    throw:  () => beep(620, 0.12, 'triangle', 0.15, 220),
-    hit:    () => { beep(180, 0.18, 'sawtooth', 0.22, 60); beep(900, 0.08, 'square', 0.1); },
-    coin:   () => beep(1320, 0.1, 'square', 0.12, 1760),
-    death:  () => beep(140, 0.5, 'sawtooth', 0.25, 40),
-    win:    () => { [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => beep(f, 0.22, 'square', 0.18), i * 110)); },
-    lose:   () => { [400, 300, 200, 120].forEach((f, i) => setTimeout(() => beep(f, 0.3, 'sawtooth', 0.2), i * 130)); },
-    alarm:  () => beep(880, 0.18, 'square', 0.2, 1320),
+    // knife leaving the hand: quick pitch-falling triangle "fwip" + a hiss of air
+    throw: () => {
+      const a = ac(); if (!a || save.muted) return;
+      tone(a, { freq: 980, slideTo: 300, dur: 0.1, type: 'triangle', vol: 0.15, attack: 0.002 });
+      noiseBurst(a, { dur: 0.06, vol: 0.05, filterType: 'highpass', freqStart: 4200, freqEnd: 1800, q: 0.6 });
+    },
+    // blade landing: filtered noise "thwack" + a sawtooth thump that drops in pitch + a tiny click
+    hit: () => {
+      const a = ac(); if (!a || save.muted) return;
+      noiseBurst(a, { dur: 0.05, vol: 0.22, filterType: 'bandpass', freqStart: 1900, freqEnd: 450, q: 1.3 });
+      tone(a, { freq: 170, slideTo: 48, dur: 0.14, type: 'sawtooth', vol: 0.2, attack: 0.001 });
+      tone(a, { freq: 1500, dur: 0.035, type: 'square', vol: 0.06, attack: 0.001 });
+    },
+    // coin pickup: two-note bright "ding-ding" shimmer, deliberately cheap (disco spams this ~30x/1.2s)
+    coin: () => {
+      const a = ac(); if (!a || save.muted) return;
+      const now = a.currentTime;
+      tone(a, { freq: 1180, slideTo: 1760, dur: 0.08, type: 'square', vol: 0.12, attack: 0.002, at: now });
+      tone(a, { freq: 1760, dur: 0.07, type: 'sine', vol: 0.09, attack: 0.002, at: now + 0.045 });
+    },
+    // a life ends: descending sawtooth + sub-bass sine + a low noise rumble tail
+    death: () => {
+      const a = ac(); if (!a || save.muted) return;
+      tone(a, { freq: 190, slideTo: 34, dur: 0.42, type: 'sawtooth', vol: 0.24, attack: 0.006 });
+      tone(a, { freq: 58, dur: 0.4, type: 'sine', vol: 0.2, attack: 0.015 });
+      noiseBurst(a, { dur: 0.14, vol: 0.16, filterType: 'lowpass', freqStart: 1200, freqEnd: 180, q: 0.7 });
+    },
+    // victory fanfare: 5-note arpeggio, each note doubled an octave down for warmth,
+    // scheduled against the audio clock (not setTimeout) so it stays tight
+    win: () => {
+      const a = ac(); if (!a || save.muted) return;
+      const now = a.currentTime;
+      [523.25, 659.25, 784.0, 1046.5, 1318.5].forEach((f, i) => {
+        const t = now + i * 0.1;
+        tone(a, { freq: f, dur: 0.26, type: 'square', vol: 0.15, attack: 0.004, at: t });
+        tone(a, { freq: f / 2, dur: 0.26, type: 'triangle', vol: 0.08, attack: 0.004, at: t });
+      });
+    },
+    // defeat dirge: descending notes with a hair of detune for grit, closed with a soft low rumble
+    lose: () => {
+      const a = ac(); if (!a || save.muted) return;
+      const now = a.currentTime;
+      [392.0, 329.6, 261.6, 196.0, 146.8].forEach((f, i) => {
+        const t = now + i * 0.14;
+        tone(a, { freq: f, dur: 0.3, type: 'sawtooth', vol: 0.15, attack: 0.008, at: t });
+        tone(a, { freq: f * 0.995, dur: 0.3, type: 'sine', vol: 0.08, attack: 0.008, at: t });
+      });
+      noiseBurst(a, { dur: 0.3, vol: 0.07, filterType: 'lowpass', freqStart: 300, freqEnd: 70, q: 0.5, at: now + 0.56 });
+    },
+    // sheriff spots you: rising square zap + a faster sawtooth overtone + a spark of noise
+    alarm: () => {
+      const a = ac(); if (!a || save.muted) return;
+      const now = a.currentTime;
+      tone(a, { freq: 820, slideTo: 1500, dur: 0.15, type: 'square', vol: 0.18, attack: 0.001, at: now });
+      tone(a, { freq: 1500, slideTo: 2100, dur: 0.08, type: 'sawtooth', vol: 0.07, attack: 0.001, at: now + 0.02 });
+      noiseBurst(a, { dur: 0.05, vol: 0.06, filterType: 'highpass', freqStart: 3000, freqEnd: 5000, q: 0.5, at: now });
+    },
+    // low sub-thump + rumble on the bigger milestone explosions (see explode())
+    boom: () => {
+      const a = ac(); if (!a || save.muted) return;
+      tone(a, { freq: 110, slideTo: 32, dur: 0.28, type: 'sine', vol: 0.2, attack: 0.002 });
+      noiseBurst(a, { dur: 0.2, vol: 0.15, filterType: 'lowpass', freqStart: 900, freqEnd: 140, q: 0.6 });
+    },
   };
 
   // ---------- Game State ----------
@@ -419,6 +523,7 @@
       innocents.push({
         x: pts[i].x, y: pts[i].y, r: 14, alive: true,
         vx: 0, vy: 0, panic: 0, wander: rand(0, Math.PI * 2), wt: rand(40, 110),
+        variant: i % 4, facing: 0,
       });
     }
     sheriff = null; murderer = null;
@@ -476,19 +581,60 @@
   function floatText(x, y, text, color) {
     floaters.push({ x, y, text, color, life: 50 });
   }
+  // Explosion shrapnel: mixes elongated "spark" streaks with round particles.
+  // Kept separate from spawnParticles() so its plain-circle callers — muzzle
+  // flash, sheriff alert flash, knife-trail dust — are untouched/unaffected.
+  // Adds `type` ('spark'|'circle') and `stretch` on top of the base particle
+  // shape {x,y,vx,vy,life,max,color,size}; the generic update() loop only
+  // reads x/y/vx/vy/life, so the extra fields ride along for free.
+  function spawnBlastParticles(x, y, color, hotColor, n, speed, sparkRatio) {
+    for (let i = 0; i < n; i++) {
+      const a = rand(0, Math.PI * 2);
+      const isSpark = Math.random() < sparkRatio;
+      const sp = isSpark ? rand(speed * 0.9, speed * 1.8) : rand(0.5, speed);
+      particles.push({
+        x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+        life: rand(isSpark ? 14 : 22, isSpark ? 30 : 44), max: 44,
+        color: Math.random() < 0.35 ? hotColor : color,
+        size: isSpark ? rand(1.5, 3) : rand(2, 5.5),
+        type: isSpark ? 'spark' : 'circle',
+        stretch: isSpark ? rand(2.6, 4.5) : 1,
+      });
+    }
+  }
   // Progressive explosions: every 5 murderer kills, the blast gets bigger & bloodier.
   function explode(x, y, color) {
     const tier = Math.floor(killsMilestone / 5);   // 0,1,2...
     const scale = diff.explodeScale * (1 + tier * 0.45);
     const baseR = 26 * scale;
-    spawnParticles(x, y, color, 18 + tier * 10, 3 + tier * 1.5);
-    spawnParticles(x, y, '#ffffff', 10 + tier * 6, 4 + tier);
-    // expanding shockwave ring(s)
+    const hot = shade(color, 0.6); // near-white hot version of the kill color
+
+    // hot core flash: one oversized short-lived particle, rendered as an
+    // additive radial bloom (white core -> kill color -> transparent) that
+    // grows and fades — the "brighter/hotter" impact punch.
+    particles.push({
+      x, y, vx: 0, vy: 0,
+      life: 10 + tier * 3, max: 10 + tier * 3,
+      color, size: (16 + tier * 7) * scale, type: 'flash',
+    });
+
+    // mixed circular + spark shrapnel: outer colored burst, inner hot/white burst
+    spawnBlastParticles(x, y, color, hot, 14 + tier * 8, 3.2 + tier * 1.4, 0.55);
+    spawnBlastParticles(x, y, hot, '#ffffff', 8 + tier * 5, 4.4 + tier * 1.7, 0.75);
+
+    // expanding shockwave ring(s): hot inner ring first, colored ring(s) after;
+    // higher tiers add extra delayed rings for a more chaotic multi-pulse feel
     const rings = 1 + Math.min(2, tier);
     for (let i = 0; i < rings; i++) {
-      shockwaves.push({ x, y, h: 14, r: baseR * (0.4 + i*0.5), speed: (3.2 + tier*0.8) * (i*0.4 + 1), life: 26 + tier*8, max: 26 + tier*8, width: 3 + tier*2, color });
+      shockwaves.push({
+        x, y, h: 14, r: baseR * (0.35 + i * 0.5),
+        speed: (3.4 + tier * 0.9) * (i * 0.35 + 1),
+        life: 24 + tier * 8, max: 24 + tier * 8,
+        width: 3 + tier * 1.6, color: i === 0 ? hot : color,
+      });
     }
     shake = Math.max(shake, 8 + tier * 4);
+    if (tier > 0) SFX.boom();   // extra low thump on milestone (bigger) explosions only
   }
   function triggerBlood() {
     // sheriff just killed the murderer — cover the screen in blood + brain matter
@@ -555,6 +701,7 @@
         inn.panic = 1;
         targetAng = angleTo(threat, inn); // run away
       } else { inn.panic = Math.max(0, inn.panic - 0.02); }
+      inn.facing = targetAng; // face the direction actually being moved (flee angle or wander angle)
       inn.wt--;
       if (inn.wt <= 0) { inn.wander = rand(0, Math.PI*2); inn.wt = rand(40, 110); }
       const sp = (inn.panic > 0.5 ? 2.6 : 1.5) * (threat ? threat.speedMul || 1 : 1);
@@ -759,12 +906,17 @@
     }
 
     // buildings (detailed 3D structures; collision = their footprint)
+    const mapAccent = MAP_ACCENT[mapCfg.name] || '#b14bff';
     for (const c of crates) {
       const g = S(c.x + c.w/2, c.y + c.h/2);
       const ww = c.w * sc, hh = c.h * sc;
       const lift = 18 * sc;
+      // stable per-building seed from the crate's world rect (fixed for the whole round,
+      // built once in buildCrates()) so each building keeps the same rooftop/material/
+      // window pattern every single frame instead of re-rolling and flickering.
+      const seed = c.x * 0.1013 + c.y * 0.0721 + c.w * 0.319 + c.h * 0.577;
       drawShadow(ctx, g.x, g.y, Math.max(ww, hh) * 0.5);
-      drawBuilding(g.x, g.y, ww, hh, lift, '#241634', shade('#241634', 0.25), 'rgba(177,75,255,0.85)');
+      drawBuilding(g.x, g.y, ww, hh, lift, shade(mapAccent, -0.72), mapAccent, seed);
       // collision footprint ring (clarity): outline the blocking area on the floor
       ctx.save();
       ctx.globalAlpha = 0.25; ctx.strokeStyle = 'rgba(255,80,120,0.9)'; ctx.lineWidth = 2;
@@ -781,7 +933,8 @@
       const g = S(inn.x, inn.y);
       drawShadow(ctx, g.x, g.y, inn.r * sc);
       ringAt(inn, 'rgba(33,230,255,0.6)');
-      drawFigure(g.x, g.y, inn.r*sc, 26*sc, { body: '#9fe7ff', coat: '#1f5f86', skin: '#ffd9b8', hair: '#6b4a2a' });
+      const outfit = INNOCENT_OUTFITS[(inn.variant || 0) % INNOCENT_OUTFITS.length];
+      drawFigure(g.x, g.y, inn.r*sc, 26*sc, { ...outfit, variant: inn.variant || 0, facing: inn.facing || 0, panic: inn.panic });
     }
 
     // sheriff (AI, murderer mode) — cowboy hat + star badge
@@ -789,7 +942,7 @@
       const g = S(sheriff.x, sheriff.y);
       drawShadow(ctx, g.x, g.y, sheriff.r * sc);
       ringAt(sheriff, 'rgba(255,213,74,0.85)');
-      drawFigure(g.x, g.y, sheriff.r*sc, 30*sc, { body: '#ffe08a', coat: '#7a5a1e', skin: '#ffd9b8', hat: 'sheriff', badge: true, glow: 'rgba(255,213,74,0.5)' });
+      drawFigure(g.x, g.y, sheriff.r*sc, 30*sc, { body: '#ffe08a', coat: '#7a5a1e', skin: '#ffd9b8', hat: 'sheriff', badge: true, glow: 'rgba(255,213,74,0.5)', facing: sheriff.dir });
       if (sheriff.alert > 0.5) {
         ctx.fillStyle = '#ff3b3b'; ctx.font = `${Math.round(20*sc)}px sans-serif`; ctx.textAlign = 'center';
         ctx.fillText('!', g.x, g.y - 44*sc);
@@ -801,21 +954,40 @@
       const g = S(murderer.x, murderer.y);
       drawShadow(ctx, g.x, g.y, murderer.r * sc);
       ringAt(murderer, 'rgba(255,46,136,0.85)');
-      drawFigure(g.x, g.y, murderer.r*sc, 30*sc, { body: '#2a1638', coat: '#170d22', skin: '#caa', hat: 'hood', glow: '#ff2e88' });
+      drawFigure(g.x, g.y, murderer.r*sc, 30*sc, { body: '#2a1638', coat: '#170d22', skin: '#caa', hat: 'hood', glow: '#ff2e88', facing: murderer.dir });
     }
 
-    // knives (lifted slightly for 3D feel)
+    // knives (lifted slightly for 3D feel) — spinning blade + comet-style motion trail
     for (const k of knives) {
       const p = S(k.x, k.y, 14);
+      const ang = Math.atan2(k.vy, k.vx);
+      const spd = Math.hypot(k.vx, k.vy);
       ctx.save();
       ctx.translate(p.x, p.y);
-      ctx.rotate(Math.atan2(k.vy, k.vx));
-      ctx.shadowColor = k.trail; ctx.shadowBlur = 12 * sc;
-      ctx.fillStyle = k.color;
-      const L = 18 * sc, Wd = 6 * sc;
-      ctx.beginPath();
-      ctx.moveTo(L*0.7, 0); ctx.lineTo(-L*0.3, -Wd/2); ctx.lineTo(-L*0.5, 0); ctx.lineTo(-L*0.3, Wd/2); ctx.closePath();
-      ctx.fill();
+
+      // motion trail: tapered glow streak + brighter hot core, back along velocity.
+      // Cheap (two strokes, no stored history) but reads as a proper knife "swoosh".
+      const trailLen = Math.min(52, spd * 3.4) * sc;
+      if (trailLen > 3) {
+        const tx = -Math.cos(ang) * trailLen, ty = -Math.sin(ang) * trailLen;
+        const tg = ctx.createLinearGradient(0, 0, tx, ty);
+        tg.addColorStop(0, k.trail);
+        tg.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.save();
+        ctx.globalAlpha = 0.55;
+        ctx.strokeStyle = tg; ctx.lineWidth = 3.4 * sc; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(tx, ty); ctx.stroke();
+        ctx.globalAlpha = 0.9;
+        ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.1 * sc;
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(tx * 0.55, ty * 0.55); ctx.stroke();
+        ctx.restore();
+      }
+
+      // blade spins rapidly in flight (visual flourish only — k.r/hit-testing untouched)
+      ctx.rotate(ang + k.life * 0.55);
+      drawKnifeBlade(ctx, 20 * sc, 6.6 * sc, k.color, k.trail, {
+        glow: 12 * sc, sparkle: true, glintAlpha: 0.5 + 0.5 * Math.abs(Math.sin(k.life * 0.5)),
+      });
       ctx.restore();
     }
 
@@ -828,26 +1000,35 @@
       const knifeColor = rainbowKnife ? rainbowColor() : k.color;
       const knifeTrail = rainbowKnife ? rainbowColor() : k.trail;
       if (currentMode === 'sheriff') {
-        drawFigure(g.x, g.y, player.r*sc, 30*sc, { body: '#ffe08a', coat: '#7a5a1e', skin: '#ffd9b8', hat: 'sheriff', badge: true, glow: 'rgba(255,213,74,0.5)' });
+        drawFigure(g.x, g.y, player.r*sc, 30*sc, { body: '#ffe08a', coat: '#7a5a1e', skin: '#ffd9b8', hat: 'sheriff', badge: true, glow: 'rgba(255,213,74,0.5)', facing: player.aim });
       } else {
-        drawFigure(g.x, g.y, player.r*sc, 30*sc, { body: '#2a1638', coat: '#170d22', skin: '#caa', hat: 'hood', glow: knifeColor });
+        drawFigure(g.x, g.y, player.r*sc, 30*sc, { body: '#2a1638', coat: '#170d22', skin: '#caa', hat: 'hood', glow: knifeColor, facing: player.aim });
       }
-      // held knife in aim direction
+      // held knife in aim direction — shares drawKnifeBlade with the flying knife
+      // so the weapon reads as the same object in-hand and mid-throw
       ctx.save(); ctx.translate(g.x, g.y - 30*sc*0.9); ctx.rotate(player.aim);
-      ctx.shadowColor = knifeTrail; ctx.shadowBlur = 12*sc;
-      ctx.fillStyle = knifeColor;
-      const L = 22*sc, Wd = 7*sc;
-      ctx.beginPath(); ctx.moveTo(L*0.7, 0); ctx.lineTo(-L*0.2, -Wd/2); ctx.lineTo(-L*0.4, 0); ctx.lineTo(-L*0.2, Wd/2); ctx.closePath(); ctx.fill();
+      drawKnifeBlade(ctx, 24 * sc, 7.6 * sc, knifeColor, knifeTrail, {
+        glow: 13 * sc, sparkle: true, glintAlpha: 0.5 + 0.5 * Math.sin(performance.now() / 260),
+      });
       ctx.restore();
     }
 
-    // shockwaves (expanding explosion rings)
+    // shockwaves (expanding rings): double stroke (soft outer glow + crisp inner
+    // ring) that shifts from white-hot to the ring's color as it expands, then fades.
     for (const w of shockwaves) {
       const p = S(w.x, w.y);
+      const t2 = Math.max(0, w.life / w.max);      // 1 -> 0 as it fades
+      const grow = 1 - t2;                          // 0 -> 1 as it expands
+      const ry = w.r * sc * (1 - camTilt);          // foreshortened to match the floor
+      const ringColor = grow < 0.35 ? shade(w.color, (0.35 - grow) * 1.6) : w.color;
       ctx.save();
-      ctx.globalAlpha = Math.max(0, w.life / w.max) * 0.6;
-      ctx.strokeStyle = w.color; ctx.lineWidth = w.width * sc;
-      ctx.beginPath(); ctx.arc(p.x, p.y - w.h*sc, w.r * sc, 0, Math.PI*2); ctx.stroke();
+      ctx.translate(p.x, p.y - w.h * sc);
+      ctx.globalAlpha = t2 * 0.32;
+      ctx.strokeStyle = ringColor; ctx.lineWidth = w.width * sc * 2.2;
+      ctx.beginPath(); ctx.ellipse(0, 0, w.r * sc, ry, 0, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = t2 * 0.85;
+      ctx.lineWidth = Math.max(1, w.width * sc * 0.8);
+      ctx.beginPath(); ctx.ellipse(0, 0, w.r * sc * 0.94, ry * 0.94, 0, 0, Math.PI * 2); ctx.stroke();
       ctx.restore();
     }
 
@@ -890,12 +1071,41 @@
       ctx.globalAlpha = 1;
     }
 
-    // particles
+    // particles: plain circles (defaults / most existing spawnParticles callers),
+    // elongated "spark" streaks, and additive "flash" blooms (kill explosions).
     for (const pt of particles) {
       const p = S(pt.x, pt.y);
-      ctx.globalAlpha = Math.max(0, pt.life / pt.max);
-      ctx.fillStyle = pt.color;
-      ctx.beginPath(); ctx.arc(p.x, p.y, pt.size * sc, 0, Math.PI*2); ctx.fill();
+      const alpha = Math.max(0, pt.life / pt.max);
+      if (pt.type === 'flash') {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = alpha * 0.9;
+        const rr = pt.size * sc * (1.4 - alpha * 0.6);
+        const grad2 = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, Math.max(1, rr));
+        grad2.addColorStop(0, '#ffffff');
+        grad2.addColorStop(0.4, pt.color);
+        grad2.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = grad2;
+        ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(1, rr), 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      } else if (pt.type === 'spark') {
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        const ang = Math.atan2(pt.vy, pt.vx);
+        const len = pt.size * sc * (pt.stretch || 3);
+        ctx.strokeStyle = pt.color;
+        ctx.lineWidth = Math.max(1, pt.size * sc * 0.6);
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(p.x - Math.cos(ang) * len, p.y - Math.sin(ang) * len);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+        ctx.restore();
+      } else {
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = pt.color;
+        ctx.beginPath(); ctx.arc(p.x, p.y, pt.size * sc, 0, Math.PI*2); ctx.fill();
+      }
     }
     ctx.globalAlpha = 1;
 
@@ -923,90 +1133,475 @@
     ctx.closePath(); ctx.fill();
   }
 
-  // ---- Advanced 3D character illustrations ----
-  // Draws a "paper-doll" figure standing with height, facing dir, lifted by h.
-  function drawFigure(x, y, rPx, hPx, opts) {
-    // opts: {body, coat, skin, hat, badge, glow, facing, panicking}
-    const s = opts || {};
-    const body = s.body || '#8be0ff';
-    const coat = s.coat || '#3a2a66';
-    const skin = s.skin || '#ffd9b8';
+  // Shared knife-blade renderer: draws a detailed dagger pointing along +x in
+  // whatever transform the caller has already set up (translate+rotate). Used
+  // for BOTH the held knife and flying knives so they read as the same weapon.
+  // L/Wd are on-screen length/width (already multiplied by the world scale).
+  // opts: { glow: shadowBlur px, sparkle: bool, glintAlpha: 0..1 }
+  function drawKnifeBlade(ctx, L, Wd, color, glowColor, opts) {
+    opts = opts || {};
+    const tipX = L * 0.62, heelX = -L * 0.18, gripEnd = -L * 0.5;
     ctx.save();
-    // legs
-    ctx.strokeStyle = coat; ctx.lineWidth = Math.max(2, rPx*0.5); ctx.lineCap='round';
+    ctx.shadowColor = glowColor;
+    ctx.shadowBlur = opts.glow != null ? opts.glow : 10;
+
+    // blade silhouette (curved dagger edge, not a flat triangle)
     ctx.beginPath();
-    ctx.moveTo(x - rPx*0.5, y); ctx.lineTo(x - rPx*0.5, y + hPx*0.55);
-    ctx.moveTo(x + rPx*0.5, y); ctx.lineTo(x + rPx*0.5, y + hPx*0.55);
+    ctx.moveTo(tipX, 0);
+    ctx.quadraticCurveTo(L * 0.18, -Wd * 0.58, heelX, -Wd * 0.46);
+    ctx.lineTo(heelX, Wd * 0.46);
+    ctx.quadraticCurveTo(L * 0.18, Wd * 0.58, tipX, 0);
+    ctx.closePath();
+    const bg = ctx.createLinearGradient(heelX, -Wd / 2, tipX, Wd / 2);
+    bg.addColorStop(0, shade(color, -0.25));
+    bg.addColorStop(0.55, color);
+    bg.addColorStop(1, '#ffffff');
+    ctx.fillStyle = bg;
+    ctx.fill();
+
+    // bright spine highlight along the top edge
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+    ctx.lineWidth = Math.max(0.5, Wd * 0.09);
+    ctx.beginPath();
+    ctx.moveTo(heelX * 0.6, -Wd * 0.14);
+    ctx.lineTo(tipX * 0.82, -Wd * 0.04);
     ctx.stroke();
-    // torso (coat)
-    ctx.fillStyle = body; ctx.strokeStyle = s.glow || 'rgba(0,0,0,0.4)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(x - rPx*0.95, y);
-    ctx.quadraticCurveTo(x, y - hPx*1.1, x + rPx*0.95, y);
-    ctx.closePath(); ctx.fill();
-    if (s.coat) { ctx.fillStyle = coat; ctx.beginPath();
-      ctx.moveTo(x - rPx*0.95, y); ctx.lineTo(x, y - hPx*0.2); ctx.lineTo(x + rPx*0.95, y);
-      ctx.lineTo(x + rPx*0.7, y + hPx*0.5); ctx.lineTo(x - rPx*0.7, y + hPx*0.5); ctx.closePath(); ctx.fill(); }
-    // head
-    const hx = x, hy = y - hPx*1.15;
-    ctx.fillStyle = skin; ctx.beginPath(); ctx.arc(hx, hy, rPx*0.55, 0, Math.PI*2); ctx.fill();
-    // hat / hair
-    if (s.hat === 'sheriff') {
-      ctx.fillStyle = '#5a3a12'; ctx.beginPath();
-      ctx.ellipse(hx, hy - rPx*0.35, rPx*0.85, rPx*0.35, 0, 0, Math.PI*2); ctx.fill();
-      ctx.fillStyle = '#6a4a1a'; ctx.fillRect(hx - rPx*0.45, hy - rPx*0.95, rPx*0.9, rPx*0.6);
-      ctx.fillStyle = '#ffd54a'; ctx.beginPath(); ctx.arc(hx, hy - rPx*0.65, rPx*0.22, 0, Math.PI*2); ctx.fill(); // badge-star
-    } else if (s.hat === 'hood') {
-      ctx.fillStyle = '#170d22'; ctx.beginPath();
-      ctx.arc(hx, hy - rPx*0.1, rPx*0.72, Math.PI, 0); ctx.fill();
-      ctx.fillStyle = '#2a1638'; ctx.beginPath(); ctx.ellipse(hx, hy, rPx*0.6, rPx*0.4, 0, 0, Math.PI*2); ctx.fill();
-      // glowing eyes
-      ctx.fillStyle = s.glow || '#ff2e88';
-      ctx.beginPath(); ctx.arc(hx - rPx*0.22, hy - rPx*0.05, rPx*0.1, 0, Math.PI*2); ctx.arc(hx + rPx*0.22, hy - rPx*0.05, rPx*0.1, 0, Math.PI*2); ctx.fill();
-    } else {
-      ctx.fillStyle = s.hair || '#6b4a2a'; ctx.beginPath(); ctx.arc(hx, hy - rPx*0.3, rPx*0.6, Math.PI, 0); ctx.fill();
+
+    // crossguard
+    ctx.fillStyle = shade(color, -0.55);
+    ctx.fillRect(heelX - Wd * 0.06, -Wd * 0.78, Wd * 0.22, Wd * 1.56);
+
+    // wrapped handle
+    ctx.fillStyle = '#1c1420';
+    const gripLen = (heelX - Wd * 0.06) - gripEnd;
+    ctx.fillRect(gripEnd, -Wd * 0.34, gripLen, Wd * 0.68);
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+    ctx.lineWidth = Math.max(0.5, Wd * 0.05);
+    for (let i = 1; i <= 2; i++) {
+      const gx = gripEnd + gripLen * (i / 3);
+      ctx.beginPath(); ctx.moveTo(gx, -Wd * 0.34); ctx.lineTo(gx, Wd * 0.34); ctx.stroke();
     }
-    // badge on chest (sheriff)
-    if (s.badge) {
-      ctx.fillStyle = '#ffd54a'; drawStar(hx, y - hPx*0.55, 5, rPx*0.4, rPx*0.18);
-      ctx.strokeStyle = '#3a2a00'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(hx, y - hPx*0.55, rPx*0.42, 0, Math.PI*2); ctx.stroke();
+
+    // pommel glint
+    ctx.fillStyle = glowColor;
+    ctx.beginPath(); ctx.arc(gripEnd, 0, Wd * 0.16, 0, Math.PI * 2); ctx.fill();
+
+    // sparkle: small twinkling highlight on the blade face
+    if (opts.sparkle) {
+      ctx.globalAlpha = opts.glintAlpha != null ? opts.glintAlpha : 0.85;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(tipX * 0.32, -Wd * 0.1, Wd * 0.16, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
     }
     ctx.restore();
   }
 
-  // 3D building: extruded box with shaded faces, windows, optional roof.
-  function drawBuilding(gx, gy, ww, hh, lift, faceColor, topColor, lineColor) {
-    const x = gx - ww/2, y = gy - hh/2;
-    // front face
-    ctx.fillStyle = faceColor;
-    ctx.fillRect(x, y - lift, ww, hh);
-    // side face (right) for depth
-    const dep = lift * 0.9;
-    ctx.fillStyle = shade(faceColor, -0.35);
+  // ---- Advanced 3D character illustrations ----
+  // Draws a "paper-doll" figure standing with height, facing dir, lifted by h.
+  // opts: { body, coat, skin, hair, hat:'sheriff'|'hood'|undefined, badge, glow, facing, variant, panic }
+  function drawFigure(x, y, rPx, hPx, opts) {
+    const s = opts || {};
+    const body = s.body || '#8be0ff';
+    const coat = s.coat || '#3a2a66';
+    const skin = s.skin || '#ffd9b8';
+    const hair = s.hair || '#6b4a2a';
+    const facing = (s.facing != null) ? s.facing : 0;
+    const variant = s.variant || 0;
+    const panic = s.panic || 0;
+    const isSheriff = s.hat === 'sheriff';
+    const isHood = s.hat === 'hood';
+    const isInnocent = !isSheriff && !isHood;
+
+    // -- facing decomposition: mirror L/R, blend front(camera)<->back(away) --
+    // After ctx.scale(mirror,1) below, local +x ALWAYS ends up on the side the
+    // character is horizontally facing — so "front" details (lean, badge, blade
+    // hand) go at local +x, "back" details (ponytail, hood point) at local -x.
+    const mirror = Math.cos(facing) < 0 ? -1 : 1;
+    const frontAmt = clamp((Math.sin(facing) + 1) / 2, 0, 1);   // 1 = toward camera, 0 = facing away
+    const lean = Math.abs(Math.cos(facing)) * rPx * 0.16;        // forward lean into facing dir
+    const tuck = (1 - frontAmt) * rPx * 0.10;                    // head tucks slightly when facing away
+
+    // cheap idle bob — phase seeded by screen pos so figures don't sync up
+    const bob = Math.sin(camSway * 2.4 + x * 0.037 + y * 0.051) * rPx * 0.05;
+    const jit = panic > 0.05 ? Math.sin(camSway * 9 + x * 0.09) * rPx * 0.05 * panic : 0;
+
+    const buildMul = isInnocent ? (0.92 + (variant % 3) * 0.07) : 1;
+    const H = hPx * buildMul;
+    const strideW = rPx * (0.42 + (panic > 0.5 ? 0.1 : 0));
+    const strideY = H * 0.55;
+    const chestX = lean * 0.7;
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(mirror, 1);
+
+    // ================= LEGS + BOOTS =================
+    ctx.strokeStyle = shade(coat, -0.2);
+    ctx.lineWidth = Math.max(2, rPx * 0.44);
+    ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.moveTo(x + ww, y - lift); ctx.lineTo(x + ww + dep*0.5, y - lift - dep*0.5);
-    ctx.lineTo(x + ww + dep*0.5, y + hh - lift - dep*0.5); ctx.lineTo(x + ww, y + hh - lift);
-    ctx.closePath(); ctx.fill();
-    // top face
-    ctx.fillStyle = topColor;
-    ctx.beginPath();
-    ctx.moveTo(x, y - lift); ctx.lineTo(x + dep*0.5, y - lift - dep*0.5);
-    ctx.lineTo(x + ww + dep*0.5, y - lift - dep*0.5); ctx.lineTo(x + ww, y - lift);
-    ctx.closePath(); ctx.fill();
-    // windows
-    ctx.fillStyle = 'rgba(33,230,255,0.25)';
-    const cols = Math.max(1, Math.floor(ww / 26)), rows = Math.max(1, Math.floor(hh / 30));
-    for (let cx = 0; cx < cols; cx++) for (let cy = 0; cy < rows; cy++) {
-      const wx = x + 8 + cx * (ww - 16) / cols, wy = y - lift + 8 + cy * (hh - 16) / rows;
-      ctx.fillRect(wx, wy, (ww - 16) / cols - 6, (hh - 16) / rows - 6);
+    ctx.moveTo(-strideW + lean * 0.3, 0);
+    ctx.lineTo(-strideW * 1.05, strideY + jit);
+    ctx.moveTo(strideW - lean * 0.3, 0);
+    ctx.lineTo(strideW * 1.05, strideY - jit);
+    ctx.stroke();
+    ctx.fillStyle = shade(coat, -0.45);
+    ctx.beginPath(); ctx.ellipse(-strideW * 1.05, strideY + jit, rPx * 0.26, rPx * 0.15, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(strideW * 1.05, strideY - jit, rPx * 0.26, rPx * 0.15, 0, 0, Math.PI * 2); ctx.fill();
+
+    // ================= CLOAK (murderer) / TORSO+COAT (sheriff & innocent) =================
+    if (isHood) {
+      const hemY = H * 0.6, hemW = rPx * 1.3;
+      ctx.fillStyle = coat;
+      ctx.beginPath();
+      ctx.moveTo(-rPx * 0.55 + lean, -H * 0.15);
+      ctx.quadraticCurveTo(lean * 0.4, -H * 1.05, rPx * 0.55 + lean, -H * 0.15);
+      ctx.quadraticCurveTo(hemW * 0.8, hemY * 0.45, hemW, hemY);
+      const teeth = 6;
+      for (let i = 0; i <= teeth; i++) {
+        const tx = hemW - (i / teeth) * hemW * 2;
+        const ty = hemY + (i % 2 === 0 ? 0 : -rPx * 0.2);
+        ctx.lineTo(tx, ty);
+      }
+      ctx.quadraticCurveTo(-hemW * 0.8, hemY * 0.45, -rPx * 0.55 + lean, -H * 0.15);
+      ctx.closePath(); ctx.fill();
+      // shoulder highlight seam
+      ctx.strokeStyle = shade(coat, 0.15); ctx.lineWidth = Math.max(1, rPx * 0.08); ctx.globalAlpha = 0.5;
+      ctx.beginPath(); ctx.moveTo(-rPx * 0.5 + lean, -H * 0.2); ctx.quadraticCurveTo(lean * 0.4, -H * 1.0, rPx * 0.5 + lean, -H * 0.2); ctx.stroke();
+      ctx.globalAlpha = 1;
+    } else {
+      // torso body-color dome
+      ctx.fillStyle = body;
+      ctx.beginPath();
+      ctx.moveTo(-rPx * 0.95, 0);
+      ctx.quadraticCurveTo(lean, -H * 1.1, rPx * 0.95, 0);
+      ctx.closePath(); ctx.fill();
+      // rim light on the front-facing shoulder
+      ctx.strokeStyle = shade(body, 0.3); ctx.lineWidth = 1.4; ctx.globalAlpha = 0.55;
+      ctx.beginPath(); ctx.moveTo(rPx * 0.15, -H * 0.9); ctx.quadraticCurveTo(rPx * 0.9, -H * 0.5, rPx * 0.9, -rPx * 0.1); ctx.stroke();
+      ctx.globalAlpha = 1;
+      // coat overlay
+      ctx.fillStyle = coat;
+      ctx.beginPath();
+      ctx.moveTo(-rPx * 0.95, 0); ctx.lineTo(lean, -H * 0.2); ctx.lineTo(rPx * 0.95, 0);
+      ctx.lineTo(rPx * 0.7, H * 0.5); ctx.lineTo(-rPx * 0.7, H * 0.5); ctx.closePath(); ctx.fill();
+      // belt
+      ctx.strokeStyle = shade(coat, -0.5); ctx.lineWidth = Math.max(1, rPx * 0.1);
+      ctx.beginPath(); ctx.moveTo(-rPx * 0.72, H * 0.18); ctx.lineTo(rPx * 0.72, H * 0.18); ctx.stroke();
+      // stubby arms (raised when panicking / fleeing)
+      ctx.strokeStyle = coat; ctx.lineWidth = Math.max(2, rPx * 0.3); ctx.lineCap = 'round';
+      const armLift = panic > 0.4 ? -rPx * 0.55 : rPx * 0.15;
+      ctx.beginPath();
+      ctx.moveTo(-rPx * 0.85, -H * 0.15); ctx.lineTo(-rPx * 1.05, armLift);
+      ctx.moveTo(rPx * 0.85, -H * 0.15); ctx.lineTo(rPx * 1.05, armLift);
+      ctx.stroke();
     }
-    // outline
-    ctx.strokeStyle = lineColor; ctx.lineWidth = 2;
-    ctx.strokeRect(x, y - lift, ww, hh);
+
+    // ================= HEAD =================
+    const hx = lean, hy = -H * 1.15 + bob + tuck;
+    if (!isHood) {
+      ctx.fillStyle = skin; ctx.beginPath(); ctx.arc(hx, hy, rPx * 0.55, 0, Math.PI * 2); ctx.fill();
+    }
+
+    if (isSheriff) {
+      // wide brim: dark underside + lighter top disc (a thin dark rim shows through)
+      ctx.fillStyle = shade('#5a3a12', -0.2);
+      ctx.beginPath(); ctx.ellipse(hx, hy - rPx * 0.26, rPx * 1.05, rPx * 0.4, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#7a5420';
+      ctx.beginPath(); ctx.ellipse(hx, hy - rPx * 0.32, rPx * 0.95, rPx * 0.32, 0, 0, Math.PI * 2); ctx.fill();
+      // crown
+      ctx.fillStyle = '#6a4a1a';
+      ctx.fillRect(hx - rPx * 0.4, hy - rPx * 0.88, rPx * 0.8, rPx * 0.56);
+      ctx.beginPath(); ctx.arc(hx, hy - rPx * 0.88, rPx * 0.4, Math.PI, 0); ctx.fill();
+      // hat band + pinch dent
+      ctx.strokeStyle = '#3a2400'; ctx.lineWidth = Math.max(1, rPx * 0.1);
+      ctx.beginPath(); ctx.moveTo(hx - rPx * 0.4, hy - rPx * 0.36); ctx.lineTo(hx + rPx * 0.4, hy - rPx * 0.36); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(hx, hy - rPx * 0.9); ctx.lineTo(hx, hy - rPx * 0.6); ctx.stroke();
+      // mustache (fades a touch when facing away)
+      ctx.strokeStyle = '#4a3320'; ctx.lineWidth = Math.max(1.4, rPx * 0.14); ctx.lineCap = 'round';
+      ctx.globalAlpha = 0.5 + frontAmt * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(hx - rPx * 0.24, hy + rPx * 0.16); ctx.quadraticCurveTo(hx, hy + rPx * 0.26, hx + rPx * 0.24, hy + rPx * 0.16);
+      ctx.stroke(); ctx.globalAlpha = 1;
+    } else if (isHood) {
+      // hood shell dome
+      ctx.fillStyle = shade(coat, -0.3);
+      ctx.beginPath(); ctx.arc(hx, hy - rPx * 0.08, rPx * 0.8, Math.PI, 0); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(hx, hy + rPx * 0.05, rPx * 0.62, rPx * 0.5, 0, 0, Math.PI * 2); ctx.fill();
+      // face void
+      ctx.fillStyle = '#0a0410';
+      ctx.beginPath(); ctx.ellipse(hx, hy + rPx * 0.08, rPx * 0.42, rPx * 0.4, 0, 0, Math.PI * 2); ctx.fill();
+      // pulsing glow eyes
+      const pulse = 1 + Math.sin(camSway * 4 + x * 0.02) * 0.18;
+      const glowCol = s.glow || '#ff2e88';
+      ctx.fillStyle = glowCol;
+      ctx.shadowColor = glowCol; ctx.shadowBlur = rPx * 0.9;
+      const eyeDx = rPx * 0.2;
+      ctx.beginPath();
+      ctx.arc(hx - eyeDx, hy + rPx * 0.02, rPx * 0.09 * pulse, 0, Math.PI * 2);
+      ctx.arc(hx + eyeDx, hy + rPx * 0.02, rPx * 0.09 * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    } else {
+      // civilian hair, styled by variant for crowd variety
+      ctx.fillStyle = hair;
+      const v = variant % 4;
+      if (v === 1) {
+        // ponytail
+        ctx.beginPath(); ctx.arc(hx, hy - rPx * 0.3, rPx * 0.58, Math.PI, 0); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(hx - rPx * 0.55, hy + rPx * 0.05, rPx * 0.14, rPx * 0.32, 0.3, 0, Math.PI * 2); ctx.fill();
+      } else if (v === 2) {
+        // flat cap
+        ctx.beginPath(); ctx.ellipse(hx, hy - rPx * 0.4, rPx * 0.62, rPx * 0.2, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.ellipse(hx, hy - rPx * 0.5, rPx * 0.38, rPx * 0.2, 0, Math.PI, 0); ctx.fill();
+      } else if (v === 3) {
+        // bandana
+        ctx.beginPath(); ctx.arc(hx, hy - rPx * 0.28, rPx * 0.58, Math.PI, 0); ctx.fill();
+        ctx.fillStyle = shade(hair, 0.45);
+        ctx.fillRect(hx - rPx * 0.58, hy - rPx * 0.16, rPx * 1.16, rPx * 0.14);
+      } else {
+        // short hair
+        ctx.beginPath(); ctx.arc(hx, hy - rPx * 0.3, rPx * 0.6, Math.PI, 0); ctx.fill();
+      }
+      // eyes (dim a touch when facing away from camera)
+      ctx.globalAlpha = 0.4 + frontAmt * 0.6;
+      ctx.fillStyle = '#1a1218';
+      ctx.beginPath();
+      ctx.arc(hx - rPx * 0.18, hy + rPx * 0.03, rPx * 0.07, 0, Math.PI * 2);
+      ctx.arc(hx + rPx * 0.18, hy + rPx * 0.03, rPx * 0.07, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      // panic tell: a little sweat glint
+      if (panic > 0.6) {
+        ctx.fillStyle = '#9be7ff'; ctx.globalAlpha = 0.85;
+        ctx.beginPath(); ctx.arc(hx + rPx * 0.4, hy - rPx * 0.05, rPx * 0.08, 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    // chest badge (sheriff)
+    if (s.badge) {
+      ctx.save();
+      ctx.shadowColor = s.glow || 'rgba(255,213,74,0.6)'; ctx.shadowBlur = rPx * 0.5;
+      ctx.fillStyle = '#ffd54a'; drawStar(chestX, -H * 0.55, 5, rPx * 0.4, rPx * 0.18);
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = '#3a2a00'; ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.arc(chestX, -H * 0.55, rPx * 0.42, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+    }
+
+    // holstered blade hint (murderer) — small dagger at the off hip, opposite throwing hand
+    if (isHood) {
+      ctx.save();
+      ctx.translate(-rPx * 0.7, H * 0.08);
+      ctx.rotate(-0.5);
+      const bladeCol = s.glow || '#ff2e88';
+      ctx.fillStyle = bladeCol;
+      ctx.shadowColor = bladeCol; ctx.shadowBlur = rPx * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(rPx * 0.5, 0); ctx.lineTo(-rPx * 0.15, -rPx * 0.12); ctx.lineTo(-rPx * 0.3, 0); ctx.lineTo(-rPx * 0.15, rPx * 0.12);
+      ctx.closePath(); ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.restore();
+    }
+
+    ctx.restore();
+  }
+
+  // ---- Building variety: per-map neon accent + alt materials, used by drawBuilding ----
+  const MAP_ACCENT = {
+    'Neon Arena':  '#b14bff',
+    'Crate Plaza': '#21e6ff',
+    'Void Vault':  '#ff2e88',
+    'Sunset Yard': '#ff7a18',
+  };
+  const BUILDING_ALTS = [
+    { face: '#132a3a', edge: 'rgba(33,230,255,0.85)' },  // steel-blue / cyan
+    { face: '#2a0f22', edge: 'rgba(255,46,136,0.85)' },  // brick-maroon / pink
+    { face: '#132a1c', edge: 'rgba(70,255,140,0.85)' },  // industrial green
+    { face: '#2a1a0a', edge: 'rgba(255,213,74,0.85)' },  // rust-amber / gold
+  ];
+  // Cheap, allocation-free deterministic pseudo-random in [0,1) from a seed + channel
+  // index (classic GLSL-style sin hash) — no closures, no Math.random(), no arrays.
+  function bhash(seed, i) {
+    const v = Math.sin(seed * 12.9898 + i * 78.233 + i * i * 0.0193) * 43758.5453;
+    return v - Math.floor(v);
+  }
+
+  // 3D building: extruded box with a shaded front/side/top, plus per-building rooftop
+  // greebles (antenna / AC unit / water tank / dish), side detailing (pipes / fire
+  // escape), an optional ground-floor awning, neon signage, and a lit/unlit window
+  // pattern — all driven by `seed`, a stable number derived from the crate's world
+  // x/y/w/h so a given building always renders the same way from frame to frame.
+  function drawBuilding(gx, gy, ww, hh, lift, faceColor, lineColor, seed) {
+    seed = seed || 0;
+    const x = gx - ww / 2, y = gy - hh / 2;
+    const pxScale = lift / 18; // decorative-pixel scale that tracks world->screen zoom
+
+    const r0 = bhash(seed, 0), r1 = bhash(seed, 1), r2 = bhash(seed, 2), r3 = bhash(seed, 3),
+          r4 = bhash(seed, 4), r5 = bhash(seed, 5), r6 = bhash(seed, 6), r7 = bhash(seed, 7),
+          r8 = bhash(seed, 8), r9 = bhash(seed, 9), r10 = bhash(seed, 10), r11 = bhash(seed, 11),
+          r12 = bhash(seed, 12);
+
+    // ---- material: mostly the caller's (map-tinted) color, sometimes a punchy neon alt ----
+    let mFace = faceColor, mEdge = lineColor;
+    if (r0 >= 0.42) {
+      const alt = BUILDING_ALTS[Math.min(BUILDING_ALTS.length - 1, ((r0 - 0.42) / 0.58 * BUILDING_ALTS.length) | 0)];
+      mFace = alt.face; mEdge = alt.edge;
+    }
+    mFace = shade(mFace, (r4 - 0.5) * 0.18); // subtle per-building tint jitter for texture
+    const mTop = shade(mFace, 0.25);
+    const mSide = shade(mFace, -0.35);
+
+    // ---- height variety (visual only; collision footprint is the caller's crate rect) ----
+    const bLift = lift * (0.8 + r1 * 0.6);
+    const dep = bLift * 0.9;
+
+    // ---- front face ----
+    ctx.fillStyle = mFace;
+    ctx.fillRect(x, y - bLift, ww, hh);
+
+    // ---- side face (right), for depth ----
+    ctx.fillStyle = mSide;
     ctx.beginPath();
-    ctx.moveTo(x, y - lift); ctx.lineTo(x + dep*0.5, y - lift - dep*0.5);
-    ctx.lineTo(x + ww + dep*0.5, y - lift - dep*0.5); ctx.lineTo(x + ww, y - lift);
+    ctx.moveTo(x + ww, y - bLift); ctx.lineTo(x + ww + dep * 0.5, y - bLift - dep * 0.5);
+    ctx.lineTo(x + ww + dep * 0.5, y + hh - bLift - dep * 0.5); ctx.lineTo(x + ww, y + hh - bLift);
+    ctx.closePath(); ctx.fill();
+
+    // ---- side greeble: pipes or a fire-escape, only if there's room ----
+    if (dep > 8 * pxScale && hh > 40) {
+      if (r5 < 0.28) {
+        ctx.strokeStyle = shade(mSide, -0.2); ctx.lineWidth = Math.max(1.2, dep * 0.09);
+        const pn = 1 + (r6 > 0.5 ? 1 : 0);
+        for (let i = 0; i < pn; i++) {
+          const px = x + ww + dep * (0.18 + i * 0.24);
+          ctx.beginPath();
+          ctx.moveTo(px, y - bLift - dep * 0.35); ctx.lineTo(px, y + hh - bLift - dep * 0.3);
+          ctx.stroke();
+        }
+      } else if (r5 < 0.5 && hh > 60) {
+        ctx.strokeStyle = 'rgba(8,5,12,0.6)'; ctx.lineWidth = Math.max(1, dep * 0.05);
+        for (let i = 0; i < 3; i++) {
+          const py = y - bLift + hh * (0.18 + i * 0.26 + r6 * 0.04);
+          ctx.beginPath();
+          ctx.moveTo(x + ww, py); ctx.lineTo(x + ww + dep * 0.4, py - dep * 0.16);
+          ctx.stroke();
+        }
+      }
+    }
+
+    // ---- top face (roof); flat, or a stepped second tier for a skyline silhouette ----
+    ctx.fillStyle = mTop;
+    ctx.beginPath();
+    ctx.moveTo(x, y - bLift); ctx.lineTo(x + dep * 0.5, y - bLift - dep * 0.5);
+    ctx.lineTo(x + ww + dep * 0.5, y - bLift - dep * 0.5); ctx.lineTo(x + ww, y - bLift);
+    ctx.closePath(); ctx.fill();
+
+    const stepped = r2 > 0.55 && ww > 46 && hh > 46;
+    if (stepped) {
+      const tw = ww * (0.4 + r3 * 0.2), tLift = (10 + r3 * 12) * pxScale, tDep = tLift * 0.9;
+      const tx = x + (ww - tw) * (0.3 + r6 * 0.4);
+      const ty = y - bLift - dep * 0.22;
+      ctx.fillStyle = shade(mFace, -0.05);
+      ctx.fillRect(tx, ty - tLift, tw, tLift);
+      ctx.fillStyle = mSide;
+      ctx.beginPath();
+      ctx.moveTo(tx + tw, ty - tLift); ctx.lineTo(tx + tw + tDep * 0.5, ty - tLift - tDep * 0.5);
+      ctx.lineTo(tx + tw + tDep * 0.5, ty - tDep * 0.5); ctx.lineTo(tx + tw, ty);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = shade(mTop, 0.08);
+      ctx.beginPath();
+      ctx.moveTo(tx, ty - tLift); ctx.lineTo(tx + tDep * 0.5, ty - tLift - tDep * 0.5);
+      ctx.lineTo(tx + tw + tDep * 0.5, ty - tLift - tDep * 0.5); ctx.lineTo(tx + tw, ty - tLift);
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = mEdge; ctx.lineWidth = 1.3;
+      ctx.strokeRect(tx, ty - tLift, tw, tLift);
+    }
+
+    // ---- roof prop: antenna / AC unit / water tank / dish (skip on tiny buildings) ----
+    const roofY = y - bLift - dep * (stepped ? 0.5 : 0.22) - (stepped ? (10 + r3 * 12) * pxScale : 0);
+    const roofX = x + ww * (0.28 + r8 * 0.44);
+    if (r7 < 0.2 && ww > 30) {
+      // antenna with a slowly blinking tip light
+      const h1 = (16 + r0 * 10) * pxScale;
+      ctx.strokeStyle = 'rgba(200,200,210,0.8)'; ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.moveTo(roofX, roofY); ctx.lineTo(roofX, roofY - h1); ctx.stroke();
+      const blink = Math.sin(camSway * 3 + seed) > 0.3;
+      ctx.fillStyle = blink ? '#ff3b5c' : 'rgba(255,59,92,0.25)';
+      ctx.beginPath(); ctx.arc(roofX, roofY - h1, 2.2 * pxScale, 0, Math.PI * 2); ctx.fill();
+    } else if (r7 < 0.4 && ww > 40 && hh > 30) {
+      // AC / vent unit
+      const uw = (12 + r0 * 8) * pxScale, uh = (8 + r1 * 5) * pxScale;
+      ctx.fillStyle = '#33323e'; ctx.fillRect(roofX - uw / 2, roofY - uh, uw, uh);
+      ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 1;
+      for (let i = 1; i < 3; i++) { const gy2 = roofY - uh + (uh / 3) * i; ctx.beginPath(); ctx.moveTo(roofX - uw / 2 + 2, gy2); ctx.lineTo(roofX + uw / 2 - 2, gy2); ctx.stroke(); }
+    } else if (r7 < 0.55 && ww > 50 && hh > 40) {
+      // rooftop water tank
+      const tR = (9 + r0 * 5) * pxScale, tH = (12 + r1 * 6) * pxScale;
+      ctx.fillStyle = '#4a3626'; ctx.fillRect(roofX - tR, roofY - tH, tR * 2, tH);
+      ctx.beginPath(); ctx.ellipse(roofX, roofY - tH, tR, tR * 0.4, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(roofX - tR, roofY); ctx.lineTo(roofX - tR - 4 * pxScale, roofY + 7 * pxScale);
+      ctx.moveTo(roofX + tR, roofY); ctx.lineTo(roofX + tR + 4 * pxScale, roofY + 7 * pxScale);
+      ctx.stroke();
+    } else if (r7 < 0.7 && ww > 36) {
+      // satellite dish
+      ctx.fillStyle = '#cfd6dc';
+      ctx.beginPath(); ctx.ellipse(roofX, roofY - 4 * pxScale, 7 * pxScale, 5 * pxScale, -0.4, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#8a929a'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(roofX, roofY - 4 * pxScale); ctx.lineTo(roofX, roofY + 4 * pxScale); ctx.stroke();
+    }
+    // (else: bare flat roof — not every building needs a prop)
+
+    // ---- ground-floor awning (storefront canopy) ----
+    if (r9 < 0.3 && ww > 50) {
+      const awY = y - bLift + hh * (0.62 + r10 * 0.15);
+      const awW = ww * (0.5 + r10 * 0.3);
+      const awX = x + (ww - awW) * (0.2 + r6 * 0.4);
+      const awH = 9 * pxScale;
+      ctx.fillStyle = mEdge; ctx.globalAlpha = 0.75;
+      ctx.beginPath();
+      ctx.moveTo(awX, awY); ctx.lineTo(awX + awW, awY);
+      ctx.lineTo(awX + awW - 5 * pxScale, awY + awH); ctx.lineTo(awX + 5 * pxScale, awY + awH);
+      ctx.closePath(); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // ---- windows: grid with a lived-in lit/unlit pattern, stable per building ----
+    const cols = Math.max(1, Math.floor(ww / 26)), rows = Math.max(1, Math.floor(hh / 30));
+    const cw = (ww - 16) / cols, ch = (hh - 16) / rows;
+    let ci = 0;
+    for (let wx0 = 0; wx0 < cols; wx0++) {
+      for (let wy0 = 0; wy0 < rows; wy0++) {
+        const wx = x + 8 + wx0 * cw, wy = y - bLift + 8 + wy0 * ch;
+        const wRoll = bhash(seed, 20 + ci); ci++;
+        if (wRoll > 0.94) ctx.fillStyle = mEdge;                          // rare accent window
+        else if (wRoll > 0.55) ctx.fillStyle = 'rgba(255,224,140,0.55)';  // warm lit window
+        else ctx.fillStyle = 'rgba(20,26,40,0.55)';                       // dark unlit window
+        ctx.fillRect(wx, wy, cw - 6, ch - 6);
+      }
+    }
+
+    // ---- neon signage bar on the front face ----
+    if (r11 < 0.4 && ww > 44) {
+      const signY = y - bLift + hh * (0.16 + r12 * 0.18);
+      const signW = ww * (0.4 + r12 * 0.3);
+      const signX = x + (ww - signW) / 2;
+      ctx.save();
+      ctx.shadowColor = mEdge; ctx.shadowBlur = 10 * pxScale;
+      ctx.fillStyle = mEdge; ctx.globalAlpha = 0.8 + Math.sin(camSway * 2 + seed) * 0.15;
+      ctx.fillRect(signX, signY, signW, 6 * pxScale);
+      ctx.restore();
+    }
+
+    // ---- outline ----
+    ctx.strokeStyle = mEdge; ctx.lineWidth = 2;
+    ctx.strokeRect(x, y - bLift, ww, hh);
+    ctx.beginPath();
+    ctx.moveTo(x, y - bLift); ctx.lineTo(x + dep * 0.5, y - bLift - dep * 0.5);
+    ctx.lineTo(x + ww + dep * 0.5, y - bLift - dep * 0.5); ctx.lineTo(x + ww, y - bLift);
     ctx.stroke();
   }
   // darken/lighten a hex color by amt (-1..1)
