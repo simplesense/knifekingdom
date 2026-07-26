@@ -29,7 +29,19 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
 
 /* ---------------- MENU ---------------- */
 #menu { display: none; }
-#menu.active { display: flex; align-items: center; justify-content: center; }
+/* On short viewports (small phones, or ANY phone in landscape) the stacked menu
+   content (logo + tagline + mode select + buttons + stats + credit box + footer)
+   is taller than the screen. #app/html/body are overflow:hidden with no scroll,
+   so without this the top (logo) and bottom (credit box/footer) get silently
+   clipped with no way to reach them. `justify-content: safe center` keeps the
+   nice centering when content fits, but falls back to start-aligned + scrollable
+   the moment it doesn't (plain `center` alone makes the overflow unreachable
+   even with overflow-y:auto, in every browser) — https://web.dev/css-safe-alignment/ */
+#menu.active {
+  display: flex; flex-direction: column; align-items: center;
+  justify-content: center; justify-content: safe center;
+  overflow-y: auto; -webkit-overflow-scrolling: touch;
+}
 .menu-bg-grid {
   position: absolute; inset: 0;
   background-image: linear-gradient(rgba(177,75,255,0.12) 1px, transparent 1px),
