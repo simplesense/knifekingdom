@@ -385,7 +385,23 @@
   const MOBILE_ZOOM = 1.5;
   function worldTransform() {
     const baseScale = Math.min(VIEW.w / WORLD.w, VIEW.h / WORLD.h);
-    const scale = isTouch ? baseScale * MOBILE_ZOOM : baseScale;
+    let scale;
+    if (isTouch) {
+      const zoomed = baseScale * MOBILE_ZOOM;
+      // Floor the zoom so the scaled world always fully covers the screen on both
+      // axes (accounting for the tilt-compressed vertical axis). `baseScale` is a
+      // "contain" fit against the whole 1280x720 (wide) world -- on a tall/narrow
+      // phone viewport that's width-constrained, so even after MOBILE_ZOOM the
+      // scaled world can end up SHORTER than the viewport. The follow-camera then
+      // clamps to the top and leaves a dead strip of empty background below the
+      // game world, above the joystick/fire button (reported as "cut off" on
+      // mobile). Math.max only ever increases the zoom when needed to close that
+      // gap -- it's a no-op wherever the tuned zoom already covers the screen.
+      const coverScale = Math.max(VIEW.w / WORLD.w, VIEW.h / (WORLD.h * (1 - camTilt)));
+      scale = Math.max(zoomed, coverScale);
+    } else {
+      scale = baseScale;
+    }
     let ox, oy;
     if (isTouch && player) {
       // follow camera centered on player, clamped within world bounds
