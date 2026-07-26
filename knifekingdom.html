@@ -253,7 +253,7 @@ body.touch #game.active .touch-hint { display: block; }
           🤖 Coded by <a href="https://hermes-agent.nousresearch.com" target="_blank" rel="noopener">Hermes</a>, the LLM that wrote this game.
         </div>
         <div id="eggToast" class="egg-toast hidden"></div>
-        <div class="menu-foot">Made with 🔪 · WASD + Mouse</div>
+        <div class="menu-foot">Made with 🔪 · WASD + Mouse <span id="versionTag"></span></div>
       </div>
     </section>
 
@@ -361,6 +361,13 @@ body.touch #game.active .touch-hint { display: block; }
    ============================================================ */
 (() => {
   'use strict';
+
+  // ---------- Version ----------
+  // Bump on every user-visible change: MAJOR.MINOR.PATCH (semver-ish).
+  // PATCH = bug fixes only. MINOR = new features/content, backwards compatible.
+  // MAJOR = breaking changes (e.g. a save-format change bumping SAVE_KEY below).
+  // See CHANGELOG.md for what shipped in each version.
+  const VERSION = '1.0.0';
 
   // ---------- Persistence ----------
   const SAVE_KEY = 'knifeKingdom.save.v1';
@@ -2228,6 +2235,7 @@ body.touch #game.active .touch-hint { display: block; }
   resize();
   refreshMenuStats();
   $('btnMute').textContent = save.muted ? '🔇' : '🔊';
+  const versionEl = $('versionTag'); if (versionEl) versionEl.textContent = 'v' + VERSION;
   show('menu');
   rafId = requestAnimationFrame(loop);
 

@@ -1,5 +1,8 @@
 # 🔪 KNIFE KINGDOM
 
+**Current version: v1.0.0** — see [CHANGELOG.md](CHANGELOG.md) for release history.
+The version is also shown in-game at the bottom of the main menu.
+
 A top-down, browser-based **Murder Mystery 2**-style game. You are the Murderer:
 sneak around neon arenas, throw knives at innocent bots, and avoid the Sheriff's
 vision cone. Earn coins, collect knife skins, unlock maps.

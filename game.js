@@ -5,6 +5,13 @@
 (() => {
   'use strict';
 
+  // ---------- Version ----------
+  // Bump on every user-visible change: MAJOR.MINOR.PATCH (semver-ish).
+  // PATCH = bug fixes only. MINOR = new features/content, backwards compatible.
+  // MAJOR = breaking changes (e.g. a save-format change bumping SAVE_KEY below).
+  // See CHANGELOG.md for what shipped in each version.
+  const VERSION = '1.0.0';
+
   // ---------- Persistence ----------
   const SAVE_KEY = 'knifeKingdom.save.v1';
   const defaultSave = {
@@ -1871,6 +1878,7 @@
   resize();
   refreshMenuStats();
   $('btnMute').textContent = save.muted ? '🔇' : '🔊';
+  const versionEl = $('versionTag'); if (versionEl) versionEl.textContent = 'v' + VERSION;
   show('menu');
   rafId = requestAnimationFrame(loop);
 
